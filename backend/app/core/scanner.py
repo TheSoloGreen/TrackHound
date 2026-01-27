@@ -153,29 +153,86 @@ class MediaScanner:
             # Analyze audio tracks
             audio_info = self.analyzer.analyze(file_path)
             
-            # Parse show info from path
+            # Parse show info from path (used as fallback)
             show_info = parse_show_info(file_path, base_path)
+            
+            # Try to get metadata from Plex first (handles English vs Japanese titles)
+            plex_metadata = None
+            if self.plex_connector:
+                plex_metadata = self.plex_connector.sync_show_metadata(
+                    file_path=file_path,
+                    title_from_path=show_info.get("show"),
+                )
+            
+            # Determine show title and anime status
+            if plex_metadata:
+                # Use Plex metadata (most reliable)
+                show_title = plex_metadata["title"]
+                is_anime = plex_metadata["is_anime"]
+                anime_source = "plex_genre" if is_anime else None
+                plex_rating_key = plex_metadata.get("plex_rating_key")
+                thumb_url = plex_metadata.get("thumb_url")
+            else:
+                # Fall back to path parsing
+                show_title = show_info.get("show")
+                is_anime = is_anime_folder
+                anime_source = "folder" if is_anime_folder else None
+                plex_rating_key = None
+                thumb_url = None
             
             # Find or create show and season
             show = None
             season = None
             
-            if show_info.get("show"):
-                # Find existing show
-                result = await db.execute(
-                    select(Show).where(Show.title == show_info["show"])
-                )
-                show = result.scalar_one_or_none()
+            if show_title:
+                # First try to find by Plex rating key (most accurate)
+                if plex_rating_key:
+                    result = await db.execute(
+                        select(Show).where(Show.plex_rating_key == plex_rating_key)
+                    )
+                    show = result.scalar_one_or_none()
+                
+                # Then try by title
+                if not show:
+                    result = await db.execute(
+                        select(Show).where(Show.title == show_title)
+                    )
+                    show = result.scalar_one_or_none()
+                
+                # Also check the path-based title (handles English folder names)
+                if not show and show_info.get("show") and show_info["show"] != show_title:
+                    result = await db.execute(
+                        select(Show).where(Show.title == show_info["show"])
+                    )
+                    existing_show = result.scalar_one_or_none()
+                    if existing_show:
+                        # Update existing show with Plex metadata
+                        show = existing_show
+                        if plex_metadata:
+                            show.title = show_title  # Update to Plex title
+                            show.plex_rating_key = plex_rating_key
+                            show.is_anime = is_anime
+                            show.anime_source = anime_source
+                            show.thumb_url = thumb_url
                 
                 if not show:
                     # Create new show
                     show = Show(
-                        title=show_info["show"],
-                        is_anime=is_anime_folder,
-                        anime_source="folder" if is_anime_folder else None,
+                        title=show_title,
+                        plex_rating_key=plex_rating_key,
+                        is_anime=is_anime,
+                        anime_source=anime_source,
+                        thumb_url=thumb_url,
                     )
                     db.add(show)
                     await db.flush()
+                elif plex_metadata and not show.plex_rating_key:
+                    # Update existing show with Plex metadata if not already set
+                    show.plex_rating_key = plex_rating_key
+                    show.is_anime = is_anime
+                    show.anime_source = anime_source
+                    if thumb_url:
+                        show.thumb_url = thumb_url
                 
                 # Find or create season
                 if show_info.get("season"):
@@ -241,10 +298,10 @@ class MediaScanner:
             await db.flush()
             
             # Evaluate preferences and set issues
-            is_anime = show.is_anime if show else is_anime_folder
+            final_is_anime = show.is_anime if show else is_anime_folder
             issues = self.preference_engine.evaluate(
                 audio_info.get("audio_tracks", []),
-                is_anime=is_anime,
+                is_anime=final_is_anime,
             )
             
             media_file.has_issues = len(issues) > 0
