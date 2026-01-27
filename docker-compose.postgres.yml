@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  cineaudit:
+    build: .
+    container_name: cineaudit-pro
+    ports:
+      - "8080:8000"
+    volumes:
+      # Media volumes - adjust these to your setup
+      - /mnt/user/Media/TV:/media/tv:ro
+      - /mnt/user/Media/Anime:/media/anime:ro
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_URL=postgresql+asyncpg://cineaudit:${POSTGRES_PASSWORD:-cineaudit}@db:5432/cineaudit
+      - CORS_ORIGINS=*
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    container_name: cineaudit-db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=cineaudit
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cineaudit}
+      - POSTGRES_DB=cineaudit
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cineaudit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

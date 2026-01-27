@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  cineaudit:
+    build: .
+    container_name: cineaudit-pro
+    ports:
+      - "8080:8000"
+    volumes:
+      # Data persistence (SQLite database)
+      - ./data:/app/data
+      # Media volumes - adjust these to your setup
+      # Mount as read-only for safety
+      - /mnt/user/Media/TV:/media/tv:ro
+      - /mnt/user/Media/Anime:/media/anime:ro
+      # Add more volumes as needed:
+      # - /mnt/user/Media/Movies:/media/movies:ro
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_URL=sqlite+aiosqlite:///./data/cineaudit.db
+      - CORS_ORIGINS=*
+    restart: unless-stopped
