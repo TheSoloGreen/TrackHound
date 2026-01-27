@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  cineaudit:
+  trackhound:
     build: .
-    container_name: cineaudit-pro
+    container_name: trackhound-pro
     ports:
       - "8080:8000"
     volumes:
@@ -12,7 +12,7 @@ services:
       - /mnt/user/Media/Anime:/media/anime:ro
     environment:
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - DATABASE_URL=postgresql+asyncpg://cineaudit:${POSTGRES_PASSWORD:-cineaudit}@db:5432/cineaudit
+      - DATABASE_URL=postgresql+asyncpg://trackhound:${POSTGRES_PASSWORD:-trackhound}@db:5432/trackhound
       - CORS_ORIGINS=*
     depends_on:
       db:
@@ -21,15 +21,15 @@ services:
 
   db:
     image: postgres:16-alpine
-    container_name: cineaudit-db
+    container_name: trackhound-db
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=cineaudit
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-cineaudit}
-      - POSTGRES_DB=cineaudit
+      - POSTGRES_USER=trackhound
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-trackhound}
+      - POSTGRES_DB=trackhound
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U cineaudit"]
+      test: ["CMD-SHELL", "pg_isready -U trackhound"]
       interval: 5s
       timeout: 5s
       retries: 5

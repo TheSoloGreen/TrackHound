@@ -1,9 +1,9 @@
 version: "3.8"
 
 services:
-  cineaudit:
+  trackhound:
     build: .
-    container_name: cineaudit-pro
+    container_name: trackhound-pro
     ports:
       - "8080:8000"
     volumes:
@@ -17,6 +17,6 @@ services:
       # - /mnt/user/Media/Movies:/media/movies:ro
     environment:
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
-      - DATABASE_URL=sqlite+aiosqlite:///./data/cineaudit.db
+      - DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
       - CORS_ORIGINS=*
     restart: unless-stopped

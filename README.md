@@ -1,4 +1,4 @@
-# CineAudit Pro
+# TrackHound
 
 Media audio track scanner with Plex integration. Scans your media library to identify files missing preferred audio languages and flags issues based on customizable rules.
 
@@ -35,8 +35,8 @@ Media audio track scanner with Plex integration. Scans your media library to ide
 
 ```bash
 # Clone the repository
-git clone https://github.com/TheSoloGreen/CineAudit-Pro.git
-cd CineAudit-Pro
+git clone https://github.com/TheSoloGreen/TrackHound.git
+cd TrackHound
 
 # Copy and configure environment
 cp .env.example .env
@@ -96,7 +96,7 @@ npm run dev
 
 **SQLite (Default)**
 ```
-DATABASE_URL=sqlite+aiosqlite:///./data/cineaudit.db
+DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
 ```
 
 **PostgreSQL**

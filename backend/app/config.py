@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # Application
-    app_name: str = "CineAudit Pro"
+    app_name: str = "TrackHound"
     debug: bool = False
     environment: Literal["development", "production", "test"] = "development"
 
@@ -35,11 +35,11 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
     # Plex OAuth
-    plex_client_identifier: str = "cineaudit-pro"
-    plex_product: str = "CineAudit Pro"
+    plex_client_identifier: str = "trackhound"
+    plex_product: str = "TrackHound"
     plex_version: str = "1.0.0"
     plex_platform: str = "Web"
-    plex_device_name: str = "CineAudit Pro"
+    plex_device_name: str = "TrackHound"
 
     # CORS - comma-separated list of allowed origins
     cors_origins: str = "http://localhost:3000,http://localhost:5173"

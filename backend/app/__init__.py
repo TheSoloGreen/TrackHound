@@ -1,3 +1,3 @@
-"""CineAudit Pro - Media Audio Track Scanner"""
+"""TrackHound - Media Audio Track Scanner"""
 
 __version__ = "0.1.0"

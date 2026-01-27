@@ -31,7 +31,7 @@ RUN mkdir -p /app/data
 
 # Environment
 ENV PYTHONUNBUFFERED=1
-ENV DATABASE_URL=sqlite+aiosqlite:///./data/cineaudit.db
+ENV DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
 
 EXPOSE 8000
 
