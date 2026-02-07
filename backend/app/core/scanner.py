@@ -1,13 +1,15 @@
 """Media file scanner for discovering and processing media files."""
 
 import asyncio
+import logging
 import os
 import re
-from datetime import datetime
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session_maker
@@ -16,7 +18,10 @@ from app.core.analyzer import AudioAnalyzer
 from app.core.plex_connector import PlexConnector
 from app.core.preference_engine import PreferenceEngine
 
-# Scan state
+logger = logging.getLogger(__name__)
+
+# Scan state with lock for thread safety
+_scan_lock = threading.Lock()
 _cancel_requested = False
 _scan_status = {
     "is_running": False,
@@ -45,26 +50,28 @@ SHOW_PATTERNS = [
 def cancel_current_scan() -> None:
     """Request cancellation of the current scan."""
     global _cancel_requested
-    _cancel_requested = True
+    with _scan_lock:
+        _cancel_requested = True
 
 
 def get_scan_status() -> dict:
     """Get the current scan status."""
-    return _scan_status.copy()
+    with _scan_lock:
+        return _scan_status.copy()
 
 
 def _update_scan_status(**kwargs) -> None:
-    """Update scan status."""
-    global _scan_status
-    _scan_status.update(kwargs)
-    # Also update the API module's state
-    try:
-        from app.api.scan import _scan_state
-        for key, value in kwargs.items():
-            if hasattr(_scan_state, key):
-                setattr(_scan_state, key, value)
-    except ImportError:
-        pass
+    """Update scan status in a thread-safe manner."""
+    with _scan_lock:
+        _scan_status.update(kwargs)
+        # Also update the API module's state
+        try:
+            from app.api.scan import _scan_state
+            for key, value in kwargs.items():
+                if hasattr(_scan_state, key):
+                    setattr(_scan_state, key, value)
+        except ImportError:
+            pass
 
 
 def parse_show_info(file_path: str, base_path: str) -> dict:
@@ -80,10 +87,18 @@ def parse_show_info(file_path: str, base_path: str) -> dict:
         match = pattern.search(relative_path)
         if match:
             groups = match.groupdict()
+            try:
+                season_num = int(groups.get("season", 0))
+            except (ValueError, TypeError):
+                season_num = 0
+            try:
+                episode_num = int(groups.get("episode", 0))
+            except (ValueError, TypeError):
+                episode_num = 0
             return {
                 "show": groups.get("show", "").strip().replace(".", " "),
-                "season": int(groups.get("season", 0)),
-                "episode": int(groups.get("episode", 0)),
+                "season": season_num,
+                "episode": episode_num,
             }
     
     # Fallback: use parent directory as show name
@@ -272,7 +287,7 @@ class MediaScanner:
             media_file.file_size = stat.st_size
             media_file.container_format = audio_info.get("container")
             media_file.duration_ms = audio_info.get("duration_ms")
-            media_file.last_scanned = datetime.utcnow()
+            media_file.last_scanned = datetime.now(timezone.utc)
             media_file.last_modified = file_mtime
             
             await db.flush()
@@ -310,8 +325,11 @@ class MediaScanner:
             return media_file
             
         except Exception as e:
+            logger.error("Error processing file %s: %s", file_path, e)
+            with _scan_lock:
+                current_errors = list(_scan_status["errors"])
             _update_scan_status(
-                errors=_scan_status["errors"] + [f"{file_path}: {str(e)}"]
+                errors=current_errors + [f"{file_path}: {str(e)}"]
             )
             return None
 
@@ -331,7 +349,7 @@ async def run_scan(
         files_scanned=0,
         files_total=0,
         current_file=None,
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
         errors=[],
     )
     
@@ -346,8 +364,11 @@ async def run_scan(
                 files = scanner.discover_files(location)
                 all_files.extend([(f, location, location_anime_flags.get(location, False)) for f in files])
             except Exception as e:
+                logger.error("Error discovering files in %s: %s", location, e)
+                with _scan_lock:
+                    current_errors = list(_scan_status["errors"])
                 _update_scan_status(
-                    errors=_scan_status["errors"] + [f"Error scanning {location}: {str(e)}"]
+                    errors=current_errors + [f"Error scanning {location}: {str(e)}"]
                 )
         
         _update_scan_status(files_total=len(all_files))
@@ -378,11 +399,11 @@ async def run_scan(
                 )
                 scan_loc = result.scalar_one_or_none()
                 if scan_loc:
-                    scan_loc.last_scanned = datetime.utcnow()
+                    scan_loc.last_scanned = datetime.now(timezone.utc)
                     file_count = await db.scalar(
-                        select(MediaFile).where(
+                        select(func.count(MediaFile.id)).where(
                             MediaFile.file_path.like(f"{location}%")
-                        ).with_only_columns(MediaFile.id).count()
+                        )
                     ) or 0
                     scan_loc.file_count = file_count
             

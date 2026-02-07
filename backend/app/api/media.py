@@ -83,8 +83,38 @@ async def list_shows(
     search: Optional[str] = None,
 ):
     """List all shows with pagination and filters."""
-    # Base query
-    query = select(Show)
+    # Build subqueries for counts (avoids N+1 queries)
+    season_count_sq = (
+        select(Season.show_id, func.count(Season.id).label("season_count"))
+        .group_by(Season.show_id)
+        .subquery()
+    )
+    episode_count_sq = (
+        select(Season.show_id, func.count(MediaFile.id).label("episode_count"))
+        .join(MediaFile, MediaFile.season_id == Season.id)
+        .group_by(Season.show_id)
+        .subquery()
+    )
+    issues_count_sq = (
+        select(Season.show_id, func.count(MediaFile.id).label("issues_count"))
+        .join(MediaFile, MediaFile.season_id == Season.id)
+        .where(MediaFile.has_issues == True)
+        .group_by(Season.show_id)
+        .subquery()
+    )
+
+    # Base query with counts joined
+    query = (
+        select(
+            Show,
+            func.coalesce(season_count_sq.c.season_count, 0).label("season_count"),
+            func.coalesce(episode_count_sq.c.episode_count, 0).label("episode_count"),
+            func.coalesce(issues_count_sq.c.issues_count, 0).label("issues_count"),
+        )
+        .outerjoin(season_count_sq, season_count_sq.c.show_id == Show.id)
+        .outerjoin(episode_count_sq, episode_count_sq.c.show_id == Show.id)
+        .outerjoin(issues_count_sq, issues_count_sq.c.show_id == Show.id)
+    )
 
     # Apply filters
     filters = []
@@ -92,6 +122,12 @@ async def list_shows(
         filters.append(Show.is_anime == is_anime)
     if search:
         filters.append(Show.title.ilike(f"%{search}%"))
+    if has_issues is not None:
+        issues_col = func.coalesce(issues_count_sq.c.issues_count, 0)
+        if has_issues:
+            filters.append(issues_col > 0)
+        else:
+            filters.append(issues_col == 0)
 
     if filters:
         query = query.where(and_(*filters))
@@ -104,28 +140,12 @@ async def list_shows(
     query = query.order_by(Show.title).offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
-    shows = result.scalars().all()
+    rows = result.all()
 
-    # Get counts for each show
+    # Build responses from joined data
     show_responses = []
-    for show in shows:
-        # Count seasons
-        season_count = await db.scalar(
-            select(func.count(Season.id)).where(Season.show_id == show.id)
-        )
-        # Count episodes
-        episode_count = await db.scalar(
-            select(func.count(MediaFile.id))
-            .join(Season)
-            .where(Season.show_id == show.id)
-        )
-        # Count issues
-        issues_count = await db.scalar(
-            select(func.count(MediaFile.id))
-            .join(Season)
-            .where(Season.show_id == show.id, MediaFile.has_issues == True)
-        )
-
+    for row in rows:
+        show = row[0]
         show_responses.append(
             ShowResponse(
                 id=show.id,
@@ -133,21 +153,13 @@ async def list_shows(
                 is_anime=show.is_anime,
                 anime_source=show.anime_source,
                 thumb_url=show.thumb_url,
-                season_count=season_count or 0,
-                episode_count=episode_count or 0,
-                issues_count=issues_count or 0,
+                season_count=row[1],
+                episode_count=row[2],
+                issues_count=row[3],
                 created_at=show.created_at,
                 updated_at=show.updated_at,
             )
         )
-
-    # Filter by has_issues after counts (can't do this efficiently in SQL without subquery)
-    if has_issues is not None:
-        if has_issues:
-            show_responses = [s for s in show_responses if s.issues_count > 0]
-        else:
-            show_responses = [s for s in show_responses if s.issues_count == 0]
-        total = len(show_responses)
 
     return ShowListResponse(
         items=show_responses,
@@ -178,25 +190,33 @@ async def get_show(
             detail="Show not found",
         )
 
-    # Build season responses with counts
+    # Build season responses with counts (batch query to avoid N+1)
     from app.models.schemas import SeasonResponse
+
+    season_ids = [s.id for s in show.seasons]
+    season_counts = {}
+    if season_ids:
+        count_result = await db.execute(
+            select(
+                MediaFile.season_id,
+                func.count(MediaFile.id).label("episode_count"),
+                func.count(MediaFile.id).filter(MediaFile.has_issues == True).label("issues_count"),
+            )
+            .where(MediaFile.season_id.in_(season_ids))
+            .group_by(MediaFile.season_id)
+        )
+        for row in count_result.all():
+            season_counts[row[0]] = {"episodes": row[1], "issues": row[2]}
 
     season_responses = []
     for season in sorted(show.seasons, key=lambda s: s.season_number):
-        episode_count = await db.scalar(
-            select(func.count(MediaFile.id)).where(MediaFile.season_id == season.id)
-        )
-        issues_count = await db.scalar(
-            select(func.count(MediaFile.id)).where(
-                MediaFile.season_id == season.id, MediaFile.has_issues == True
-            )
-        )
+        counts = season_counts.get(season.id, {"episodes": 0, "issues": 0})
         season_responses.append(
             SeasonResponse(
                 id=season.id,
                 season_number=season.season_number,
-                episode_count=episode_count or 0,
-                issues_count=issues_count or 0,
+                episode_count=counts["episodes"],
+                issues_count=counts["issues"],
             )
         )
 

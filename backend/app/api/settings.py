@@ -1,9 +1,11 @@
 """Settings API endpoints for user preferences."""
 
 import json
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,21 +69,30 @@ async def get_settings(
     # Audio preferences
     audio_json = await get_user_preference(db, current_user.id, "audio_preferences")
     if audio_json:
-        audio_prefs = AudioPreferences.model_validate_json(audio_json)
+        try:
+            audio_prefs = AudioPreferences.model_validate_json(audio_json)
+        except ValidationError:
+            audio_prefs = DEFAULT_AUDIO_PREFERENCES
     else:
         audio_prefs = DEFAULT_AUDIO_PREFERENCES
 
     # Anime detection
     anime_json = await get_user_preference(db, current_user.id, "anime_detection")
     if anime_json:
-        anime_detection = AnimeDetectionSettings.model_validate_json(anime_json)
+        try:
+            anime_detection = AnimeDetectionSettings.model_validate_json(anime_json)
+        except ValidationError:
+            anime_detection = DEFAULT_ANIME_DETECTION
     else:
         anime_detection = DEFAULT_ANIME_DETECTION
 
     # File extensions
     ext_json = await get_user_preference(db, current_user.id, "file_extensions")
     if ext_json:
-        file_extensions = json.loads(ext_json)
+        try:
+            file_extensions = json.loads(ext_json)
+        except (json.JSONDecodeError, TypeError):
+            file_extensions = DEFAULT_FILE_EXTENSIONS
     else:
         file_extensions = DEFAULT_FILE_EXTENSIONS
 

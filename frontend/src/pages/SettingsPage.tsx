@@ -32,6 +32,10 @@ export default function SettingsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
     },
+    onError: () => {
+      // Refetch to revert optimistic changes
+      queryClient.invalidateQueries({ queryKey: ['settings'] })
+    },
   })
 
   // Location mutations
@@ -176,14 +180,15 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.audio_preferences.require_english_non_anime ?? true}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   audio_preferences: {
-                    ...settings?.audio_preferences!,
+                    ...settings.audio_preferences,
                     require_english_non_anime: e.target.checked,
                   },
                 })
-              }
+              }}
               className="w-4 h-4 text-orange-500 rounded"
             />
             <div>
@@ -200,14 +205,15 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.audio_preferences.require_japanese_anime ?? true}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   audio_preferences: {
-                    ...settings?.audio_preferences!,
+                    ...settings.audio_preferences,
                     require_japanese_anime: e.target.checked,
                   },
                 })
-              }
+              }}
               className="w-4 h-4 text-orange-500 rounded"
             />
             <div>
@@ -224,14 +230,15 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.audio_preferences.require_dual_audio_anime ?? true}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   audio_preferences: {
-                    ...settings?.audio_preferences!,
+                    ...settings.audio_preferences,
                     require_dual_audio_anime: e.target.checked,
                   },
                 })
-              }
+              }}
               className="w-4 h-4 text-orange-500 rounded"
             />
             <div>
@@ -248,14 +255,15 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.audio_preferences.check_default_track ?? true}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   audio_preferences: {
-                    ...settings?.audio_preferences!,
+                    ...settings.audio_preferences,
                     check_default_track: e.target.checked,
                   },
                 })
-              }
+              }}
               className="w-4 h-4 text-orange-500 rounded"
             />
             <div>
@@ -281,14 +289,15 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.anime_detection.use_plex_genres ?? true}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   anime_detection: {
-                    ...settings?.anime_detection!,
+                    ...settings.anime_detection,
                     use_plex_genres: e.target.checked,
                   },
                 })
-              }
+              }}
               className="w-4 h-4 text-orange-500 rounded"
             />
             <div>
@@ -311,14 +320,15 @@ export default function SettingsPage() {
             <input
               type="text"
               value={settings?.anime_detection.anime_folder_keywords.join(', ') ?? ''}
-              onChange={(e) =>
+              onChange={(e) => {
+                if (!settings) return
                 updateSettings.mutate({
                   anime_detection: {
-                    ...settings?.anime_detection!,
+                    ...settings.anime_detection,
                     anime_folder_keywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
                   },
                 })
-              }
+              }}
               placeholder="anime, animation"
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />

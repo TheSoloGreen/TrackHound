@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Tv, Loader2 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
@@ -9,7 +9,9 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [pinId, setPinId] = useState<number | null>(null)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const windowCheckRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const cancelledRef = useRef(false)
 
   // Redirect if already authenticated
   useEffect(() => {
@@ -18,25 +20,41 @@ export default function LoginPage() {
     }
   }, [isAuthenticated, navigate])
 
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      cancelledRef.current = true
+      if (pollTimerRef.current) {
+        clearTimeout(pollTimerRef.current)
+      }
+      if (windowCheckRef.current) {
+        clearInterval(windowCheckRef.current)
+      }
+    }
+  }, [])
+
   // Poll for Plex authorization
   const pollForAuth = useCallback(async (id: number) => {
     let attempts = 0
     const maxAttempts = 60 // 5 minutes with 5-second intervals
 
     const poll = async () => {
+      if (cancelledRef.current) return
+
       try {
         const response = await authApi.completeLogin(id)
+        if (cancelledRef.current) return
         await login(response.data.access_token)
         navigate('/', { replace: true })
       } catch (err: unknown) {
+        if (cancelledRef.current) return
         attempts++
         if (attempts < maxAttempts) {
           // PIN not yet authorized, keep polling
-          setTimeout(poll, 5000)
+          pollTimerRef.current = setTimeout(poll, 5000)
         } else {
           setError('Authorization timed out. Please try again.')
           setIsLoading(false)
-          setPinId(null)
         }
       }
     }
@@ -45,14 +63,16 @@ export default function LoginPage() {
   }, [login, navigate])
 
   const handlePlexLogin = async () => {
+    // Prevent multiple simultaneous login attempts
+    if (isLoading) return
+
     setIsLoading(true)
     setError(null)
+    cancelledRef.current = false
 
     try {
       const response = await authApi.initiateLogin()
       const { pin_id, auth_url } = response.data
-
-      setPinId(pin_id)
 
       // Open Plex auth in a new window
       const authWindow = window.open(
@@ -64,11 +84,13 @@ export default function LoginPage() {
       // Start polling for authorization
       pollForAuth(pin_id)
 
-      // Also check if window closed without completing auth
-      const checkWindowClosed = setInterval(() => {
-        if (authWindow?.closed && pinId === pin_id) {
-          // Window closed, but we're still polling - that's fine
-          clearInterval(checkWindowClosed)
+      // Check if window closed without completing auth
+      windowCheckRef.current = setInterval(() => {
+        if (authWindow?.closed) {
+          if (windowCheckRef.current) {
+            clearInterval(windowCheckRef.current)
+            windowCheckRef.current = null
+          }
         }
       }, 1000)
     } catch (err) {

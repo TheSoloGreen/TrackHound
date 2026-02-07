@@ -1,9 +1,15 @@
 """Application configuration using Pydantic Settings."""
 
+import logging
+import warnings
 from functools import lru_cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+_INSECURE_DEFAULT_KEY = "change-me-in-production-use-openssl-rand-hex-32"
 
 
 class Settings(BaseSettings):
@@ -30,7 +36,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/cineaudit.db"
 
     # Security
-    secret_key: str = "change-me-in-production-use-openssl-rand-hex-32"
+    secret_key: str = _INSECURE_DEFAULT_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
@@ -44,10 +50,28 @@ class Settings(BaseSettings):
     # CORS - comma-separated list of allowed origins
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    def validate_secret_key(self) -> None:
+        """Warn or raise if the secret key is insecure."""
+        if self.secret_key == _INSECURE_DEFAULT_KEY:
+            if self.environment == "production":
+                raise ValueError(
+                    "SECRET_KEY must be set to a secure value in production. "
+                    "Generate one with: openssl rand -hex 32"
+                )
+            warnings.warn(
+                "Using default SECRET_KEY — set a secure value before deploying. "
+                "Generate one with: openssl rand -hex 32",
+                stacklevel=2,
+            )
+
     @property
     def cors_origins_list(self) -> list[str]:
-        """Parse CORS origins into a list."""
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+        """Parse CORS origins into a list, filtering empty strings."""
+        return [
+            origin.strip()
+            for origin in self.cors_origins.split(",")
+            if origin.strip()
+        ]
 
     @property
     def is_sqlite(self) -> bool:
@@ -63,4 +87,6 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    settings = Settings()
+    settings.validate_secret_key()
+    return settings

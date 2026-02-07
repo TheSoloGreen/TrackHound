@@ -76,6 +76,9 @@ export default function Layout({ children }: LayoutProps) {
                     src={user.plex_thumb_url}
                     alt={user.plex_username}
                     className="w-8 h-8 rounded-full"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none'
+                    }}
                   />
                 )}
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
@@ -86,6 +89,7 @@ export default function Layout({ children }: LayoutProps) {
                 onClick={handleLogout}
                 className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
                 title="Logout"
+                aria-label="Logout"
               >
                 <LogOut className="w-5 h-5" />
               </button>
@@ -94,6 +98,8 @@ export default function Layout({ children }: LayoutProps) {
               <button
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 className="md:hidden p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+                aria-expanded={mobileMenuOpen}
               >
                 {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>

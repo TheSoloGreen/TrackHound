@@ -73,7 +73,7 @@ class Exporter:
                     "filename": getattr(mf, 'filename', None),
                     "episode_number": getattr(mf, 'episode_number', None),
                     "episode_title": getattr(mf, 'episode_title', None),
-                    "file_size_mb": round(getattr(mf, 'file_size', 0) / (1024 * 1024), 2),
+                    "file_size_mb": round((getattr(mf, 'file_size', None) or 0) / (1024 * 1024), 2),
                     "container": getattr(mf, 'container_format', None),
                     "has_issues": getattr(mf, 'has_issues', False),
                     "issue_details": getattr(mf, 'issue_details', None),

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import { mediaApi } from '../api/client'
+import { useDebounce } from '../hooks/useDebounce'
 import type { MediaFile, PaginatedResponse } from '../types'
 
 function AudioTrackBadge({ track }: { track: MediaFile['audio_tracks'][0] }) {
@@ -27,14 +28,15 @@ export default function FilesPage() {
   const [search, setSearch] = useState('')
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const debouncedSearch = useDebounce(search, 300)
 
-  const { data, isLoading } = useQuery<PaginatedResponse<MediaFile>>({
-    queryKey: ['files', page, search, hasIssues],
+  const { data, isLoading, error } = useQuery<PaginatedResponse<MediaFile>>({
+    queryKey: ['files', page, debouncedSearch, hasIssues],
     queryFn: async () => {
       const response = await mediaApi.getFiles({
         page,
         page_size: 25,
-        search: search || undefined,
+        search: debouncedSearch || undefined,
         has_issues: hasIssues,
       })
       return response.data
@@ -95,6 +97,13 @@ export default function FilesPage() {
         </select>
       </div>
 
+      {/* Error message */}
+      {error && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">Failed to load files. Please try again.</p>
+        </div>
+      )}
+
       {/* Files Table */}
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
@@ -114,9 +123,8 @@ export default function FilesPage() {
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
               {data?.items.map((file) => (
-                <>
+                <Fragment key={file.id}>
                   <tr
-                    key={file.id}
                     className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer ${
                       file.has_issues ? 'bg-red-50/50 dark:bg-red-900/10' : ''
                     }`}
@@ -135,8 +143,8 @@ export default function FilesPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
-                        {file.audio_tracks.slice(0, 3).map((track, i) => (
-                          <AudioTrackBadge key={i} track={track} />
+                        {file.audio_tracks.slice(0, 3).map((track) => (
+                          <AudioTrackBadge key={track.id} track={track} />
                         ))}
                         {file.audio_tracks.length > 3 && (
                           <span className="text-xs text-gray-500">+{file.audio_tracks.length - 3}</span>
@@ -178,8 +186,8 @@ export default function FilesPage() {
                           <div>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Audio Tracks:</span>
                             <div className="mt-2 space-y-2">
-                              {file.audio_tracks.map((track, i) => (
-                                <div key={i} className="flex items-center gap-4 text-sm">
+                              {file.audio_tracks.map((track) => (
+                                <div key={track.id} className="flex items-center gap-4 text-sm">
                                   <AudioTrackBadge track={track} />
                                   <span className="text-gray-600 dark:text-gray-400">
                                     {track.codec} • {track.channel_layout || `${track.channels}ch`}
@@ -194,7 +202,7 @@ export default function FilesPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>

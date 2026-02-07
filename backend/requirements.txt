@@ -24,8 +24,5 @@ pymediainfo>=6.0.0
 # Plex integration
 plexapi>=4.15.0
 
-# Data export
-pandas>=2.0.0
-
 # Development
 python-dotenv>=1.0.0

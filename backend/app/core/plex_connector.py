@@ -1,9 +1,12 @@
 """Plex Media Server connector for metadata retrieval."""
 
+import logging
 import os
 import re
 from typing import Optional
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -176,7 +179,7 @@ class PlexConnector:
                 continue
             
             for show in section.all():
-                genres = [g.tag for g in getattr(show, 'genres', [])]
+                genres = [g.tag for g in (getattr(show, 'genres', None) or [])]
                 is_anime = self._is_anime(genres)
                 
                 # Get both title and original title
@@ -195,8 +198,8 @@ class PlexConnector:
                                 for part in media.parts:
                                     if part.file:
                                         file_paths.append(part.file)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to get episodes for show '%s': %s", title, e)
                 
                 plex_show = PlexShow(
                     rating_key=str(show.ratingKey),
@@ -380,8 +383,10 @@ class PlexConnector:
             
             for episode in show.episodes():
                 file_path = None
-                if episode.media and episode.media[0].parts:
-                    file_path = episode.media[0].parts[0].file
+                if episode.media:
+                    first_media = episode.media[0]
+                    if hasattr(first_media, 'parts') and first_media.parts:
+                        file_path = first_media.parts[0].file
                 
                 episodes.append(PlexEpisode(
                     rating_key=str(episode.ratingKey),
@@ -390,8 +395,8 @@ class PlexConnector:
                     episode_number=episode.episodeNumber,
                     file_path=file_path,
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to get episodes for rating_key '%s': %s", rating_key, e)
         
         return episodes
 

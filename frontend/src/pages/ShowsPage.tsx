@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Search, AlertTriangle, ChevronRight, Filter } from 'lucide-react'
+import { Search, AlertTriangle, ChevronRight } from 'lucide-react'
 import { mediaApi } from '../api/client'
+import { useDebounce } from '../hooks/useDebounce'
 import type { Show, PaginatedResponse } from '../types'
 
 export default function ShowsPage() {
@@ -13,13 +14,15 @@ export default function ShowsPage() {
     has_issues: undefined as boolean | undefined,
   })
 
-  const { data, isLoading } = useQuery<PaginatedResponse<Show>>({
-    queryKey: ['shows', page, search, filters],
+  const debouncedSearch = useDebounce(search, 300)
+
+  const { data, isLoading, error } = useQuery<PaginatedResponse<Show>>({
+    queryKey: ['shows', page, debouncedSearch, filters],
     queryFn: async () => {
       const response = await mediaApi.getShows({
         page,
         page_size: 20,
-        search: search || undefined,
+        search: debouncedSearch || undefined,
         is_anime: filters.is_anime,
         has_issues: filters.has_issues,
       })
@@ -85,6 +88,13 @@ export default function ShowsPage() {
           </select>
         </div>
       </div>
+
+      {/* Error message */}
+      {error && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">Failed to load shows. Please try again.</p>
+        </div>
+      )}
 
       {/* Shows List */}
       {isLoading ? (

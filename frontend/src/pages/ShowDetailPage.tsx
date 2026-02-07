@@ -10,26 +10,29 @@ export default function ShowDetailPage() {
   const queryClient = useQueryClient()
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
 
-  const { data: show, isLoading } = useQuery<ShowDetail>({
+  const showId = Number(id)
+
+  const { data: show, isLoading, error: showError } = useQuery<ShowDetail>({
     queryKey: ['show', id],
     queryFn: async () => {
-      const response = await mediaApi.getShow(Number(id))
+      const response = await mediaApi.getShow(showId)
       return response.data
     },
+    enabled: !isNaN(showId),
   })
 
-  const { data: seasonDetail } = useQuery<SeasonDetail>({
+  const { data: seasonDetail, isLoading: seasonLoading } = useQuery<SeasonDetail>({
     queryKey: ['season', id, selectedSeason],
     queryFn: async () => {
-      const response = await mediaApi.getSeason(Number(id), selectedSeason!)
+      const response = await mediaApi.getSeason(showId, selectedSeason!)
       return response.data
     },
-    enabled: !!selectedSeason,
+    enabled: !!selectedSeason && !isNaN(showId),
   })
 
   const toggleAnimeMutation = useMutation({
     mutationFn: (isAnime: boolean) =>
-      mediaApi.updateShow(Number(id), { is_anime: isAnime, anime_source: isAnime ? 'manual' : undefined }),
+      mediaApi.updateShow(showId, { is_anime: isAnime, anime_source: isAnime ? 'manual' : undefined }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['show', id] })
     },
@@ -135,7 +138,11 @@ export default function ShowDetailPage() {
           <h2 className="font-semibold text-gray-900 dark:text-white mb-4">
             {selectedSeason ? `Season ${selectedSeason} Episodes` : 'Select a season'}
           </h2>
-          {seasonDetail ? (
+          {seasonLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500"></div>
+            </div>
+          ) : seasonDetail ? (
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
               {seasonDetail.media_files.map((file) => (
                 <div
@@ -158,9 +165,9 @@ export default function ShowDetailPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-1">
-                      {file.audio_tracks.map((track, i) => (
+                      {file.audio_tracks.map((track) => (
                         <span
-                          key={i}
+                          key={track.id}
                           className={`px-2 py-0.5 text-xs rounded ${
                             track.language === 'en'
                               ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'

@@ -1,5 +1,6 @@
 """Scan API endpoints for managing scan locations and running scans."""
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
@@ -19,8 +20,9 @@ from app.models.schemas import (
 
 router = APIRouter()
 
-# Global scan state (in production, use Redis or similar)
+# Global scan state with lock for thread safety
 _scan_state = ScanStatus(is_running=False)
+_scan_lock = asyncio.Lock()
 
 
 def get_scan_state() -> ScanStatus:
@@ -169,32 +171,36 @@ async def start_scan(
     """Start a new scan."""
     global _scan_state
 
-    if _scan_state.is_running:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A scan is already in progress",
-        )
-
-    # Get locations to scan
-    if request.location_ids:
-        result = await db.execute(
-            select(ScanLocation).where(
-                ScanLocation.id.in_(request.location_ids),
-                ScanLocation.enabled == True,
+    async with _scan_lock:
+        if _scan_state.is_running:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A scan is already in progress",
             )
-        )
-    else:
-        result = await db.execute(
-            select(ScanLocation).where(ScanLocation.enabled == True)
-        )
 
-    locations = result.scalars().all()
+        # Get locations to scan
+        if request.location_ids:
+            result = await db.execute(
+                select(ScanLocation).where(
+                    ScanLocation.id.in_(request.location_ids),
+                    ScanLocation.enabled == True,
+                )
+            )
+        else:
+            result = await db.execute(
+                select(ScanLocation).where(ScanLocation.enabled == True)
+            )
 
-    if not locations:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No enabled scan locations found",
-        )
+        locations = result.scalars().all()
+
+        if not locations:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No enabled scan locations found",
+            )
+
+        # Mark as running before releasing the lock
+        _scan_state.is_running = True
 
     # Import here to avoid circular imports
     from app.core.scanner import run_scan

@@ -48,7 +48,7 @@ function StatCard({
 export default function DashboardPage() {
   const queryClient = useQueryClient()
 
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
+  const { data: stats, isLoading: statsLoading, error: statsError } = useQuery<DashboardStats>({
     queryKey: ['stats'],
     queryFn: async () => {
       const response = await mediaApi.getStats()
@@ -56,7 +56,7 @@ export default function DashboardPage() {
     },
   })
 
-  const { data: scanStatus, isLoading: statusLoading } = useQuery<ScanStatus>({
+  const { data: scanStatus } = useQuery<ScanStatus>({
     queryKey: ['scanStatus'],
     queryFn: async () => {
       const response = await scanApi.getStatus()
@@ -73,11 +73,18 @@ export default function DashboardPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
+    onError: () => {
+      // Refresh status on error in case the scan state changed
+      queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
+    },
   })
 
   const cancelScan = useMutation({
     mutationFn: () => scanApi.cancel(),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
+    },
+    onError: () => {
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
   })
@@ -144,6 +151,22 @@ export default function DashboardPage() {
               />
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Error message */}
+      {statsError && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">Failed to load dashboard stats. Please try again.</p>
+        </div>
+      )}
+
+      {/* Scan error messages */}
+      {(startScan.isError || cancelScan.isError) && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">
+            {startScan.isError ? 'Failed to start scan.' : 'Failed to cancel scan.'} Please try again.
+          </p>
         </div>
       )}
 

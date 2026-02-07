@@ -149,7 +149,9 @@ class AudioAnalyzer:
             audio_index = 0
             for track in media_info.tracks:
                 if track.track_type == "Audio":
-                    language_raw = track.language or track.other_language[0] if track.other_language else None
+                    # Safely extract language, handling empty other_language lists
+                    other_langs = getattr(track, 'other_language', None)
+                    language_raw = track.language or (other_langs[0] if other_langs else None)
                     
                     # Try to detect language from title if not set
                     detected_lang = normalize_language(language_raw)
@@ -160,19 +162,26 @@ class AudioAnalyzer:
                                 detected_lang = code
                                 break
                     
-                    channels = track.channel_s or 2
-                    channel_layout = track.channel_layout if hasattr(track, 'channel_layout') else None
+                    channels = getattr(track, 'channel_s', None) or 2
+                    channel_layout = getattr(track, 'channel_layout', None)
+                    
+                    # Safely parse bitrate
+                    raw_bitrate = getattr(track, 'bit_rate', None)
+                    try:
+                        bitrate = int(raw_bitrate) if raw_bitrate else None
+                    except (ValueError, TypeError):
+                        bitrate = None
                     
                     audio_track = {
                         "index": audio_index,
                         "language": detected_lang,
                         "language_raw": language_raw,
-                        "codec": track.format or track.codec_id,
+                        "codec": track.format or getattr(track, 'codec_id', None),
                         "channels": channels,
                         "channel_layout": parse_channel_layout(channels, channel_layout),
-                        "bitrate": int(track.bit_rate) if track.bit_rate else None,
-                        "is_default": track.default == "Yes" if hasattr(track, 'default') else (audio_index == 0),
-                        "is_forced": track.forced == "Yes" if hasattr(track, 'forced') else False,
+                        "bitrate": bitrate,
+                        "is_default": getattr(track, 'default', None) == "Yes" if hasattr(track, 'default') else (audio_index == 0),
+                        "is_forced": getattr(track, 'forced', None) == "Yes" if hasattr(track, 'forced') else False,
                         "title": track.title,
                     }
                     result["audio_tracks"].append(audio_track)
@@ -224,9 +233,9 @@ class AudioAnalyzer:
     def has_language(self, file_path: str, language: str) -> bool:
         """Check if file has audio track in specified language."""
         languages = self.get_languages(file_path)
-        return language.lower() in [l.lower() for l in languages if l]
+        return language.lower() in [lang.lower() for lang in languages if lang]
 
     def has_dual_audio(self, file_path: str, lang1: str = "en", lang2: str = "ja") -> bool:
         """Check if file has both specified languages."""
-        languages = [l.lower() for l in self.get_languages(file_path) if l]
+        languages = [lang.lower() for lang in self.get_languages(file_path) if lang]
         return lang1.lower() in languages and lang2.lower() in languages

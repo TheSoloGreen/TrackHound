@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============== Auth Schemas ==============
@@ -84,7 +84,7 @@ class ScanStatus(BaseModel):
     files_total: int = 0
     current_file: Optional[str] = None
     started_at: Optional[datetime] = None
-    errors: list[str] = []
+    errors: list[str] = Field(default_factory=list)
 
 
 class ScanStartRequest(BaseModel):

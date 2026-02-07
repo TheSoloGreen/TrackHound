@@ -34,18 +34,18 @@ export function useAuth() {
     queryClient.clear()
   }, [queryClient])
 
-  // Check for token changes
+  // Check for token changes (from other tabs or 401 interceptor)
   useEffect(() => {
-    const handleStorageChange = () => {
-      const newToken = localStorage.getItem('token')
-      if (newToken !== token) {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'token' || e.key === null) {
+        const newToken = localStorage.getItem('token')
         setToken(newToken)
       }
     }
 
     window.addEventListener('storage', handleStorageChange)
     return () => window.removeEventListener('storage', handleStorageChange)
-  }, [token])
+  }, [])
 
   return {
     user,

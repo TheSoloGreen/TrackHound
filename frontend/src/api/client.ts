@@ -18,13 +18,15 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle auth errors
+// Handle auth errors — clear token and dispatch a storage event
+// so useAuth can react via React Router instead of a hard redirect
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      window.location.href = '/login'
+      // Dispatch storage event so useAuth picks up the change
+      window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: null }))
     }
     return Promise.reject(error)
   }

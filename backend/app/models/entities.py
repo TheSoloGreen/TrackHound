@@ -1,10 +1,15 @@
 """SQLAlchemy ORM entity models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def _utcnow() -> datetime:
+    """Return current UTC time (timezone-aware)."""
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -22,13 +27,13 @@ class User(Base):
     plex_user_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     plex_username: Mapped[str] = mapped_column(String(255), nullable=False)
     plex_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    plex_token: Mapped[str] = mapped_column(Text, nullable=False)  # Encrypted
+    plex_token: Mapped[str] = mapped_column(Text, nullable=False)  # Stored as plaintext — consider encrypting
     plex_thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, nullable=False
     )
     last_login: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
     # Relationships
@@ -68,10 +73,10 @@ class Show(Base):
     )  # plex_genre, folder, manual
     thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
     )
 
     # Relationships
@@ -117,7 +122,7 @@ class MediaFile(Base):
     container_format: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     last_scanned: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, nullable=False
     )
     last_modified: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     has_issues: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -175,5 +180,5 @@ class ScanLocation(Base):
     last_scanned: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False
+        DateTime, default=_utcnow, nullable=False
     )

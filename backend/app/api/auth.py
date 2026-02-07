@@ -1,6 +1,6 @@
 """Authentication API endpoints with Plex OAuth."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 import httpx
@@ -38,7 +38,7 @@ def get_plex_headers() -> dict:
 
 def create_access_token(user_id: int) -> str:
     """Create JWT access token."""
-    expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
     to_encode = {"sub": str(user_id), "exp": expire}
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
@@ -64,7 +64,11 @@ async def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    result = await db.execute(select(User).where(User.id == int(user_id)))
+    try:
+        uid = int(user_id)
+    except (ValueError, TypeError):
+        raise credentials_exception
+    result = await db.execute(select(User).where(User.id == uid))
     user = result.scalar_one_or_none()
 
     if user is None:
@@ -93,8 +97,14 @@ async def initiate_plex_login():
             )
 
         pin_data = response.json()
-        pin_id = pin_data["id"]
-        pin_code = pin_data["code"]
+        pin_id = pin_data.get("id")
+        pin_code = pin_data.get("code")
+
+        if not pin_id or not pin_code:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unexpected response from Plex API",
+            )
 
         # Build the auth URL
         auth_url = (
@@ -139,7 +149,7 @@ async def complete_plex_login(
         pin_data = response.json()
         auth_token = pin_data.get("authToken")
 
-        if not auth_token:
+        if not auth_token or not auth_token.strip():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="PIN not yet authorized. Please complete authorization in browser.",
@@ -158,7 +168,12 @@ async def complete_plex_login(
             )
 
         plex_user = user_response.json()
-        plex_user_id = str(plex_user["id"])
+        plex_user_id = str(plex_user.get("id", ""))
+        if not plex_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to get user ID from Plex",
+            )
         plex_username = plex_user.get("username", plex_user.get("title", "Unknown"))
         plex_email = plex_user.get("email")
         plex_thumb = plex_user.get("thumb")
@@ -175,7 +190,7 @@ async def complete_plex_login(
             user.plex_email = plex_email
             user.plex_token = auth_token
             user.plex_thumb_url = plex_thumb
-            user.last_login = datetime.utcnow()
+            user.last_login = datetime.now(timezone.utc)
         else:
             # Create new user
             user = User(
