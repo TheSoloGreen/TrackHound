@@ -1,6 +1,6 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, AlertTriangle, Languages, Check, X } from 'lucide-react'
+import { ArrowLeft, AlertTriangle } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import type { ShowDetail, SeasonDetail } from '../types'
 import { useState } from 'react'
@@ -12,7 +12,7 @@ export default function ShowDetailPage() {
 
   const showId = Number(id)
 
-  const { data: show, isLoading, error: showError } = useQuery<ShowDetail>({
+  const { data: show, isLoading } = useQuery<ShowDetail>({
     queryKey: ['show', id],
     queryFn: async () => {
       const response = await mediaApi.getShow(showId)

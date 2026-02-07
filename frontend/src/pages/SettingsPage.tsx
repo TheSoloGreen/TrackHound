@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Save, Plus, Trash2, FolderOpen, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, FolderOpen } from 'lucide-react'
 import { settingsApi, scanApi } from '../api/client'
 import type { UserSettings, ScanLocation } from '../types'
 

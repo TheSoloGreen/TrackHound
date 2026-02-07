@@ -1,22 +1,23 @@
-version: "3.8"
-
 services:
   trackhound:
     build: .
-    container_name: trackhound-pro
+    container_name: trackhound
     ports:
-      - "8080:8000"
+      - "8383:8000"
     volumes:
       # Data persistence (SQLite database)
-      - ./data:/app/data
-      # Media volumes - adjust these to your setup
-      # Mount as read-only for safety
-      - /mnt/user/Media/TV:/media/tv:ro
-      - /mnt/user/Media/Anime:/media/anime:ro
-      # Add more volumes as needed:
-      # - /mnt/user/Media/Movies:/media/movies:ro
+      - /mnt/user/appdata/trackhound:/app/data
+      # Helheim media (adjust paths to match your Unraid shares)
+      - /mnt/user/Media/Movies:/media/helheim/movies:ro
+      - /mnt/user/Media/TV Shows:/media/helheim/tv:ro
+      # Yggdrasil media (mount via Unassigned Devices or remote share)
+      # - /mnt/remotes/yggdrasil/media/Anime/Anime (Sub):/media/yggdrasil/anime-sub:ro
+      # - /mnt/remotes/yggdrasil/media/Anime/Anime Movies:/media/yggdrasil/anime-movies:ro
+      # - /mnt/remotes/yggdrasil/media/Movies:/media/yggdrasil/movies:ro
+      # - /mnt/remotes/yggdrasil/media/TV Shows:/media/yggdrasil/tv:ro
     environment:
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set — generate with: openssl rand -hex 32}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
       - DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8080}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8383}
+      - ENVIRONMENT=production
     restart: unless-stopped
