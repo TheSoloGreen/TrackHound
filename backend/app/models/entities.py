@@ -59,12 +59,15 @@ class UserPreference(Base):
 
 
 class Show(Base):
-    """TV show model."""
+    """Media title model (movie, TV show, or anime)."""
 
     __tablename__ = "shows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
+    media_type: Mapped[str] = mapped_column(
+        String(20), default="tv", nullable=False
+    )  # tv, movie, anime
     plex_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     plex_rating_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_anime: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -82,6 +85,12 @@ class Show(Base):
     # Relationships
     seasons: Mapped[list["Season"]] = relationship(
         "Season", back_populates="show", cascade="all, delete-orphan"
+    )
+    media_files: Mapped[list["MediaFile"]] = relationship(
+        "MediaFile",
+        back_populates="show",
+        foreign_keys="MediaFile.show_id",
+        cascade="all, delete-orphan",
     )
 
 
@@ -111,6 +120,9 @@ class MediaFile(Base):
     __tablename__ = "media_files"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    show_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("shows.id", ondelete="SET NULL"), nullable=True
+    )
     season_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("seasons.id", ondelete="SET NULL"), nullable=True
     )
@@ -129,6 +141,9 @@ class MediaFile(Base):
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
+    show: Mapped[Optional["Show"]] = relationship(
+        "Show", back_populates="media_files", foreign_keys=[show_id]
+    )
     season: Mapped[Optional["Season"]] = relationship(
         "Season", back_populates="media_files"
     )
@@ -175,7 +190,9 @@ class ScanLocation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     path: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
-    is_anime_folder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    media_type: Mapped[str] = mapped_column(
+        String(20), default="tv", nullable=False
+    )  # tv, movie, anime
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_scanned: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

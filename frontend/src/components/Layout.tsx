@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import {
   LayoutDashboard,
-  Tv,
+  Library,
   FileVideo,
   Settings,
   LogOut,
@@ -17,7 +17,7 @@ interface LayoutProps {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/shows', icon: Tv, label: 'Shows' },
+  { to: '/library', icon: Library, label: 'Library' },
   { to: '/files', icon: FileVideo, label: 'Files' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
@@ -41,7 +41,7 @@ export default function Layout({ children }: LayoutProps) {
             {/* Logo */}
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-orange-500 rounded-lg flex items-center justify-center">
-                <Tv className="w-5 h-5 text-white" />
+                <FileVideo className="w-5 h-5 text-white" />
               </div>
               <span className="text-xl font-bold text-gray-900 dark:text-white">
                 TrackHound

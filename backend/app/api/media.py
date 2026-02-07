@@ -4,8 +4,7 @@ from math import ceil
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,10 +12,12 @@ from app.api.auth import get_current_user
 from app.models.database import get_db
 from app.models.entities import User, Show, Season, MediaFile, AudioTrack
 from app.models.schemas import (
+    AudioTrackResponse,
     ShowResponse,
     ShowDetailResponse,
     ShowUpdate,
     ShowListResponse,
+    SeasonResponse,
     SeasonDetailResponse,
     MediaFileResponse,
     MediaFileListResponse,
@@ -24,6 +25,44 @@ from app.models.schemas import (
 )
 
 router = APIRouter()
+
+
+def _build_audio_track_responses(audio_tracks: list) -> list[AudioTrackResponse]:
+    """Build AudioTrackResponse list from ORM objects."""
+    return [
+        AudioTrackResponse(
+            id=at.id,
+            track_index=at.track_index,
+            language=at.language,
+            language_raw=at.language_raw,
+            codec=at.codec,
+            channels=at.channels,
+            channel_layout=at.channel_layout,
+            bitrate=at.bitrate,
+            is_default=at.is_default,
+            is_forced=at.is_forced,
+            title=at.title,
+        )
+        for at in sorted(audio_tracks, key=lambda a: a.track_index)
+    ]
+
+
+def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
+    """Build MediaFileResponse from ORM object."""
+    return MediaFileResponse(
+        id=mf.id,
+        file_path=mf.file_path,
+        filename=mf.filename,
+        episode_number=mf.episode_number,
+        episode_title=mf.episode_title,
+        file_size=mf.file_size,
+        container_format=mf.container_format,
+        duration_ms=mf.duration_ms,
+        last_scanned=mf.last_scanned,
+        has_issues=mf.has_issues,
+        issue_details=mf.issue_details,
+        audio_tracks=_build_audio_track_responses(mf.audio_tracks),
+    )
 
 
 # ============== Dashboard Stats ==============
@@ -35,33 +74,31 @@ async def get_dashboard_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Get dashboard statistics."""
-    # Total shows
-    total_shows = await db.scalar(select(func.count(Show.id)))
+    total_titles = await db.scalar(select(func.count(Show.id))) or 0
 
-    # Anime vs non-anime
+    movie_count = await db.scalar(
+        select(func.count(Show.id)).where(Show.media_type == "movie")
+    ) or 0
+    tv_count = await db.scalar(
+        select(func.count(Show.id)).where(Show.media_type == "tv")
+    ) or 0
     anime_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.is_anime == True)
-    )
-    non_anime_count = total_shows - anime_count
+        select(func.count(Show.id)).where(Show.media_type == "anime")
+    ) or 0
 
-    # Total episodes (media files with season association)
-    total_episodes = await db.scalar(
-        select(func.count(MediaFile.id)).where(MediaFile.season_id.isnot(None))
-    )
+    total_files = await db.scalar(select(func.count(MediaFile.id))) or 0
 
-    # Files with issues
     files_with_issues = await db.scalar(
         select(func.count(MediaFile.id)).where(MediaFile.has_issues == True)
-    )
+    ) or 0
 
-    # TODO: Implement detailed issue counts once preference engine is complete
-    # For now, return placeholder values
     return DashboardStats(
-        total_shows=total_shows or 0,
-        total_episodes=total_episodes or 0,
-        total_files_with_issues=files_with_issues or 0,
-        anime_count=anime_count or 0,
-        non_anime_count=non_anime_count or 0,
+        total_titles=total_titles,
+        total_files=total_files,
+        total_files_with_issues=files_with_issues,
+        movie_count=movie_count,
+        tv_count=tv_count,
+        anime_count=anime_count,
         missing_english_count=0,
         missing_japanese_count=0,
         missing_dual_audio_count=0,
@@ -69,7 +106,7 @@ async def get_dashboard_stats(
     )
 
 
-# ============== Shows ==============
+# ============== Shows / Library ==============
 
 
 @router.get("/shows", response_model=ShowListResponse)
@@ -78,12 +115,13 @@ async def list_shows(
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
+    media_type: Optional[str] = None,
     is_anime: Optional[bool] = None,
     has_issues: Optional[bool] = None,
     search: Optional[str] = None,
 ):
-    """List all shows with pagination and filters."""
-    # Build subqueries for counts (avoids N+1 queries)
+    """List all titles with pagination and filters."""
+    # Subqueries for season-based counts (TV/anime)
     season_count_sq = (
         select(Season.show_id, func.count(Season.id).label("season_count"))
         .group_by(Season.show_id)
@@ -95,67 +133,107 @@ async def list_shows(
         .group_by(Season.show_id)
         .subquery()
     )
-    issues_count_sq = (
-        select(Season.show_id, func.count(MediaFile.id).label("issues_count"))
+    season_issues_sq = (
+        select(Season.show_id, func.count(MediaFile.id).label("season_issues"))
         .join(MediaFile, MediaFile.season_id == Season.id)
         .where(MediaFile.has_issues == True)
         .group_by(Season.show_id)
         .subquery()
     )
 
-    # Base query with counts joined
+    # Subqueries for direct file counts (movies)
+    direct_file_count_sq = (
+        select(
+            MediaFile.show_id,
+            func.count(MediaFile.id).label("direct_file_count"),
+        )
+        .where(MediaFile.show_id.isnot(None), MediaFile.season_id.is_(None))
+        .group_by(MediaFile.show_id)
+        .subquery()
+    )
+    direct_issues_sq = (
+        select(
+            MediaFile.show_id,
+            func.count(MediaFile.id).label("direct_issues"),
+        )
+        .where(
+            MediaFile.show_id.isnot(None),
+            MediaFile.season_id.is_(None),
+            MediaFile.has_issues == True,
+        )
+        .group_by(MediaFile.show_id)
+        .subquery()
+    )
+
+    # Base query
     query = (
         select(
             Show,
             func.coalesce(season_count_sq.c.season_count, 0).label("season_count"),
             func.coalesce(episode_count_sq.c.episode_count, 0).label("episode_count"),
-            func.coalesce(issues_count_sq.c.issues_count, 0).label("issues_count"),
+            func.coalesce(season_issues_sq.c.season_issues, 0).label("season_issues"),
+            func.coalesce(direct_file_count_sq.c.direct_file_count, 0).label("direct_file_count"),
+            func.coalesce(direct_issues_sq.c.direct_issues, 0).label("direct_issues"),
         )
         .outerjoin(season_count_sq, season_count_sq.c.show_id == Show.id)
         .outerjoin(episode_count_sq, episode_count_sq.c.show_id == Show.id)
-        .outerjoin(issues_count_sq, issues_count_sq.c.show_id == Show.id)
+        .outerjoin(season_issues_sq, season_issues_sq.c.show_id == Show.id)
+        .outerjoin(direct_file_count_sq, direct_file_count_sq.c.show_id == Show.id)
+        .outerjoin(direct_issues_sq, direct_issues_sq.c.show_id == Show.id)
     )
 
     # Apply filters
     filters = []
+    if media_type is not None:
+        filters.append(Show.media_type == media_type)
     if is_anime is not None:
         filters.append(Show.is_anime == is_anime)
     if search:
         filters.append(Show.title.ilike(f"%{search}%"))
     if has_issues is not None:
-        issues_col = func.coalesce(issues_count_sq.c.issues_count, 0)
+        total_issues = (
+            func.coalesce(season_issues_sq.c.season_issues, 0)
+            + func.coalesce(direct_issues_sq.c.direct_issues, 0)
+        )
         if has_issues:
-            filters.append(issues_col > 0)
+            filters.append(total_issues > 0)
         else:
-            filters.append(issues_col == 0)
+            filters.append(total_issues == 0)
 
     if filters:
         query = query.where(and_(*filters))
 
-    # Get total count
+    # Total count
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
 
-    # Apply pagination
+    # Pagination
     query = query.order_by(Show.title).offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
     rows = result.all()
 
-    # Build responses from joined data
     show_responses = []
     for row in rows:
         show = row[0]
+        season_count = row[1]
+        episode_count = row[2]
+        s_issues = row[3]
+        direct_files = row[4]
+        d_issues = row[5]
+
         show_responses.append(
             ShowResponse(
                 id=show.id,
                 title=show.title,
+                media_type=show.media_type,
                 is_anime=show.is_anime,
                 anime_source=show.anime_source,
                 thumb_url=show.thumb_url,
-                season_count=row[1],
-                episode_count=row[2],
-                issues_count=row[3],
+                season_count=season_count,
+                episode_count=episode_count,
+                file_count=direct_files,
+                issues_count=s_issues + d_issues,
                 created_at=show.created_at,
                 updated_at=show.updated_at,
             )
@@ -176,10 +254,13 @@ async def get_show(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Get show details with seasons."""
+    """Get title details with seasons (TV/anime) or files (movies)."""
     result = await db.execute(
         select(Show)
-        .options(selectinload(Show.seasons))
+        .options(
+            selectinload(Show.seasons),
+            selectinload(Show.media_files).selectinload(MediaFile.audio_tracks),
+        )
         .where(Show.id == show_id)
     )
     show = result.scalar_one_or_none()
@@ -187,11 +268,13 @@ async def get_show(
     if not show:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Show not found",
+            detail="Title not found",
         )
 
-    # Build season responses with counts (batch query to avoid N+1)
-    from app.models.schemas import SeasonResponse
+    # Build season responses (TV/anime)
+    season_responses = []
+    total_episode_count = 0
+    total_season_issues = 0
 
     season_ids = [s.id for s in show.seasons]
     season_counts = {}
@@ -208,7 +291,6 @@ async def get_show(
         for row in count_result.all():
             season_counts[row[0]] = {"episodes": row[1], "issues": row[2]}
 
-    season_responses = []
     for season in sorted(show.seasons, key=lambda s: s.season_number):
         counts = season_counts.get(season.id, {"episodes": 0, "issues": 0})
         season_responses.append(
@@ -219,19 +301,29 @@ async def get_show(
                 issues_count=counts["issues"],
             )
         )
+        total_episode_count += counts["episodes"]
+        total_season_issues += counts["issues"]
+
+    # Build direct file responses (movies — files linked via show_id, no season)
+    direct_files = [mf for mf in show.media_files if mf.season_id is None]
+    media_file_responses = [_build_media_file_response(mf) for mf in direct_files]
+    direct_issues = sum(1 for mf in direct_files if mf.has_issues)
 
     return ShowDetailResponse(
         id=show.id,
         title=show.title,
+        media_type=show.media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
         thumb_url=show.thumb_url,
         season_count=len(season_responses),
-        episode_count=sum(s.episode_count for s in season_responses),
-        issues_count=sum(s.issues_count for s in season_responses),
+        episode_count=total_episode_count,
+        file_count=len(media_file_responses),
+        issues_count=total_season_issues + direct_issues,
         created_at=show.created_at,
         updated_at=show.updated_at,
         seasons=season_responses,
+        media_files=media_file_responses,
     )
 
 
@@ -242,16 +334,22 @@ async def update_show(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """Update show properties (e.g., mark as anime)."""
+    """Update title properties."""
     result = await db.execute(select(Show).where(Show.id == show_id))
     show = result.scalar_one_or_none()
 
     if not show:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Show not found",
+            detail="Title not found",
         )
 
+    if updates.media_type is not None:
+        show.media_type = updates.media_type
+        if updates.media_type == "anime":
+            show.is_anime = True
+        elif updates.media_type in ("tv", "movie"):
+            show.is_anime = False
     if updates.is_anime is not None:
         show.is_anime = updates.is_anime
         if updates.is_anime and not show.anime_source:
@@ -261,28 +359,39 @@ async def update_show(
 
     await db.flush()
 
-    # Get counts
+    # Counts
     season_count = await db.scalar(
         select(func.count(Season.id)).where(Season.show_id == show.id)
-    )
+    ) or 0
     episode_count = await db.scalar(
         select(func.count(MediaFile.id)).join(Season).where(Season.show_id == show.id)
-    )
+    ) or 0
+    file_count = await db.scalar(
+        select(func.count(MediaFile.id)).where(
+            MediaFile.show_id == show.id, MediaFile.season_id.is_(None)
+        )
+    ) or 0
     issues_count = await db.scalar(
-        select(func.count(MediaFile.id))
-        .join(Season)
-        .where(Season.show_id == show.id, MediaFile.has_issues == True)
-    )
+        select(func.count(MediaFile.id)).where(
+            or_(
+                MediaFile.season_id.in_(select(Season.id).where(Season.show_id == show.id)),
+                and_(MediaFile.show_id == show.id, MediaFile.season_id.is_(None)),
+            ),
+            MediaFile.has_issues == True,
+        )
+    ) or 0
 
     return ShowResponse(
         id=show.id,
         title=show.title,
+        media_type=show.media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
         thumb_url=show.thumb_url,
-        season_count=season_count or 0,
-        episode_count=episode_count or 0,
-        issues_count=issues_count or 0,
+        season_count=season_count,
+        episode_count=episode_count,
+        file_count=file_count,
+        issues_count=issues_count,
         created_at=show.created_at,
         updated_at=show.updated_at,
     )
@@ -312,43 +421,10 @@ async def get_season(
             detail="Season not found",
         )
 
-    # Build media file responses
-    from app.models.schemas import AudioTrackResponse
-
-    media_files = []
-    for mf in sorted(season.media_files, key=lambda m: m.episode_number or 0):
-        audio_tracks = [
-            AudioTrackResponse(
-                id=at.id,
-                track_index=at.track_index,
-                language=at.language,
-                language_raw=at.language_raw,
-                codec=at.codec,
-                channels=at.channels,
-                channel_layout=at.channel_layout,
-                bitrate=at.bitrate,
-                is_default=at.is_default,
-                is_forced=at.is_forced,
-                title=at.title,
-            )
-            for at in sorted(mf.audio_tracks, key=lambda a: a.track_index)
-        ]
-        media_files.append(
-            MediaFileResponse(
-                id=mf.id,
-                file_path=mf.file_path,
-                filename=mf.filename,
-                episode_number=mf.episode_number,
-                episode_title=mf.episode_title,
-                file_size=mf.file_size,
-                container_format=mf.container_format,
-                duration_ms=mf.duration_ms,
-                last_scanned=mf.last_scanned,
-                has_issues=mf.has_issues,
-                issue_details=mf.issue_details,
-                audio_tracks=audio_tracks,
-            )
-        )
+    media_files = [
+        _build_media_file_response(mf)
+        for mf in sorted(season.media_files, key=lambda m: m.episode_number or 0)
+    ]
 
     return SeasonDetailResponse(
         id=season.id,
@@ -373,17 +449,19 @@ async def list_media_files(
     search: Optional[str] = None,
 ):
     """List media files with pagination and filters."""
-    # Base query
     query = select(MediaFile).options(selectinload(MediaFile.audio_tracks))
 
-    # Apply filters
     filters = []
     if has_issues is not None:
         filters.append(MediaFile.has_issues == has_issues)
     if show_id is not None:
+        # Match files linked via season OR directly via show_id
         filters.append(
-            MediaFile.season_id.in_(
-                select(Season.id).where(Season.show_id == show_id)
+            or_(
+                MediaFile.season_id.in_(
+                    select(Season.id).where(Season.show_id == show_id)
+                ),
+                MediaFile.show_id == show_id,
             )
         )
     if search:
@@ -392,53 +470,15 @@ async def list_media_files(
     if filters:
         query = query.where(and_(*filters))
 
-    # Get total count
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
 
-    # Apply pagination
     query = query.order_by(MediaFile.file_path).offset((page - 1) * page_size).limit(page_size)
 
     result = await db.execute(query)
     files = result.scalars().all()
 
-    # Build responses
-    from app.models.schemas import AudioTrackResponse
-
-    file_responses = []
-    for mf in files:
-        audio_tracks = [
-            AudioTrackResponse(
-                id=at.id,
-                track_index=at.track_index,
-                language=at.language,
-                language_raw=at.language_raw,
-                codec=at.codec,
-                channels=at.channels,
-                channel_layout=at.channel_layout,
-                bitrate=at.bitrate,
-                is_default=at.is_default,
-                is_forced=at.is_forced,
-                title=at.title,
-            )
-            for at in sorted(mf.audio_tracks, key=lambda a: a.track_index)
-        ]
-        file_responses.append(
-            MediaFileResponse(
-                id=mf.id,
-                file_path=mf.file_path,
-                filename=mf.filename,
-                episode_number=mf.episode_number,
-                episode_title=mf.episode_title,
-                file_size=mf.file_size,
-                container_format=mf.container_format,
-                duration_ms=mf.duration_ms,
-                last_scanned=mf.last_scanned,
-                has_issues=mf.has_issues,
-                issue_details=mf.issue_details,
-                audio_tracks=audio_tracks,
-            )
-        )
+    file_responses = [_build_media_file_response(mf) for mf in files]
 
     return MediaFileListResponse(
         items=file_responses,
@@ -469,36 +509,4 @@ async def get_media_file(
             detail="Media file not found",
         )
 
-    from app.models.schemas import AudioTrackResponse
-
-    audio_tracks = [
-        AudioTrackResponse(
-            id=at.id,
-            track_index=at.track_index,
-            language=at.language,
-            language_raw=at.language_raw,
-            codec=at.codec,
-            channels=at.channels,
-            channel_layout=at.channel_layout,
-            bitrate=at.bitrate,
-            is_default=at.is_default,
-            is_forced=at.is_forced,
-            title=at.title,
-        )
-        for at in sorted(mf.audio_tracks, key=lambda a: a.track_index)
-    ]
-
-    return MediaFileResponse(
-        id=mf.id,
-        file_path=mf.file_path,
-        filename=mf.filename,
-        episode_number=mf.episode_number,
-        episode_title=mf.episode_title,
-        file_size=mf.file_size,
-        container_format=mf.container_format,
-        duration_ms=mf.duration_ms,
-        last_scanned=mf.last_scanned,
-        has_issues=mf.has_issues,
-        issue_details=mf.issue_details,
-        audio_tracks=audio_tracks,
-    )
+    return _build_media_file_response(mf)

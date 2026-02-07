@@ -42,10 +42,11 @@ export const authApi = {
 
 // Scan API
 export const scanApi = {
+  browse: (path?: string) => api.get('/api/scan/browse', { params: { path } }),
   getLocations: () => api.get('/api/scan/locations'),
-  createLocation: (data: { path: string; label: string; is_anime_folder?: boolean }) =>
+  createLocation: (data: { path: string; label: string; media_type: string }) =>
     api.post('/api/scan/locations', data),
-  updateLocation: (id: number, data: { label?: string; is_anime_folder?: boolean; enabled?: boolean }) =>
+  updateLocation: (id: number, data: { label?: string; media_type?: string; enabled?: boolean }) =>
     api.patch(`/api/scan/locations/${id}`, data),
   deleteLocation: (id: number) => api.delete(`/api/scan/locations/${id}`),
   getStatus: () => api.get('/api/scan/status'),
@@ -56,10 +57,10 @@ export const scanApi = {
 // Media API
 export const mediaApi = {
   getStats: () => api.get('/api/media/stats'),
-  getShows: (params?: { page?: number; page_size?: number; is_anime?: boolean; has_issues?: boolean; search?: string }) =>
+  getShows: (params?: { page?: number; page_size?: number; media_type?: string; is_anime?: boolean; has_issues?: boolean; search?: string }) =>
     api.get('/api/media/shows', { params }),
   getShow: (id: number) => api.get(`/api/media/shows/${id}`),
-  updateShow: (id: number, data: { is_anime?: boolean; anime_source?: string }) =>
+  updateShow: (id: number, data: { media_type?: string; is_anime?: boolean; anime_source?: string }) =>
     api.patch(`/api/media/shows/${id}`, data),
   getSeason: (showId: number, seasonNumber: number) =>
     api.get(`/api/media/shows/${showId}/seasons/${seasonNumber}`),

@@ -45,7 +45,7 @@ class ScanLocationCreate(BaseModel):
 
     path: str
     label: str
-    is_anime_folder: bool = False
+    media_type: str = "tv"  # tv, movie, anime
     enabled: bool = True
 
 
@@ -53,7 +53,7 @@ class ScanLocationUpdate(BaseModel):
     """Update an existing scan location."""
 
     label: Optional[str] = None
-    is_anime_folder: Optional[bool] = None
+    media_type: Optional[str] = None
     enabled: Optional[bool] = None
 
 
@@ -65,11 +65,25 @@ class ScanLocationResponse(BaseModel):
     id: int
     path: str
     label: str
-    is_anime_folder: bool
+    media_type: str
     enabled: bool
     last_scanned: Optional[datetime] = None
     file_count: int
     created_at: datetime
+
+
+class DirectoryEntry(BaseModel):
+    """A directory entry for browsing."""
+
+    name: str
+    path: str
+
+
+class DirectoryBrowseResponse(BaseModel):
+    """Response from directory browse endpoint."""
+
+    current_path: str
+    directories: list[DirectoryEntry]
 
 
 # ============== Scan Schemas ==============
@@ -177,25 +191,29 @@ class ShowResponse(BaseModel):
 
     id: int
     title: str
+    media_type: str = "tv"
     is_anime: bool
     anime_source: Optional[str] = None
     thumb_url: Optional[str] = None
     season_count: int = 0
     episode_count: int = 0
+    file_count: int = 0
     issues_count: int = 0
     created_at: datetime
     updated_at: datetime
 
 
 class ShowDetailResponse(ShowResponse):
-    """Show with seasons."""
+    """Show with seasons and direct files (for movies)."""
 
     seasons: list[SeasonResponse] = []
+    media_files: list[MediaFileResponse] = []
 
 
 class ShowUpdate(BaseModel):
     """Update show properties."""
 
+    media_type: Optional[str] = None
     is_anime: Optional[bool] = None
     anime_source: Optional[str] = None
 
@@ -252,11 +270,12 @@ class UserSettingsUpdate(BaseModel):
 class DashboardStats(BaseModel):
     """Dashboard statistics."""
 
-    total_shows: int
-    total_episodes: int
+    total_titles: int
+    total_files: int
     total_files_with_issues: int
+    movie_count: int
+    tv_count: int
     anime_count: int
-    non_anime_count: int
     missing_english_count: int
     missing_japanese_count: int
     missing_dual_audio_count: int

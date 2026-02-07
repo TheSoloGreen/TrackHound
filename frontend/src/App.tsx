@@ -37,8 +37,11 @@ function App() {
             <Layout>
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
-                <Route path="/shows" element={<ShowsPage />} />
-                <Route path="/shows/:id" element={<ShowDetailPage />} />
+                <Route path="/library" element={<ShowsPage />} />
+                <Route path="/library/:id" element={<ShowDetailPage />} />
+                {/* Redirect old /shows routes to /library */}
+                <Route path="/shows" element={<Navigate to="/library" replace />} />
+                <Route path="/shows/:id" element={<Navigate to="/library" replace />} />
                 <Route path="/files" element={<FilesPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>

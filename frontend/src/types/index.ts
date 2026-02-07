@@ -8,16 +8,29 @@ export interface User {
   last_login: string
 }
 
+// Media type union
+export type MediaType = 'tv' | 'movie' | 'anime'
+
 // Scan types
 export interface ScanLocation {
   id: number
   path: string
   label: string
-  is_anime_folder: boolean
+  media_type: MediaType
   enabled: boolean
   last_scanned: string | null
   file_count: number
   created_at: string
+}
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+}
+
+export interface DirectoryBrowseResponse {
+  current_path: string
+  directories: DirectoryEntry[]
 }
 
 export interface ScanStatus {
@@ -75,11 +88,13 @@ export interface SeasonDetail extends Season {
 export interface Show {
   id: number
   title: string
+  media_type: MediaType
   is_anime: boolean
   anime_source: string | null
   thumb_url: string | null
   season_count: number
   episode_count: number
+  file_count: number
   issues_count: number
   created_at: string
   updated_at: string
@@ -87,6 +102,7 @@ export interface Show {
 
 export interface ShowDetail extends Show {
   seasons: Season[]
+  media_files: MediaFile[]
 }
 
 // Settings types
@@ -111,11 +127,12 @@ export interface UserSettings {
 
 // Dashboard stats
 export interface DashboardStats {
-  total_shows: number
-  total_episodes: number
+  total_titles: number
+  total_files: number
   total_files_with_issues: number
+  movie_count: number
+  tv_count: number
   anime_count: number
-  non_anime_count: number
   missing_english_count: number
   missing_japanese_count: number
   missing_dual_audio_count: number

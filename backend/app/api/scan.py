@@ -1,9 +1,10 @@
 """Scan API endpoints for managing scan locations and running scans."""
 
 import asyncio
+from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +12,8 @@ from app.api.auth import get_current_user
 from app.models.database import get_db
 from app.models.entities import User, ScanLocation
 from app.models.schemas import (
+    DirectoryBrowseResponse,
+    DirectoryEntry,
     ScanLocationCreate,
     ScanLocationUpdate,
     ScanLocationResponse,
@@ -24,10 +27,62 @@ router = APIRouter()
 _scan_state = ScanStatus(is_running=False)
 _scan_lock = asyncio.Lock()
 
+# Root path for directory browsing (security boundary)
+MEDIA_ROOT = "/media"
+
 
 def get_scan_state() -> ScanStatus:
     """Get current scan state."""
     return _scan_state
+
+
+# ============== Directory Browsing ==============
+
+
+@router.get("/browse", response_model=DirectoryBrowseResponse)
+async def browse_directories(
+    current_user: Annotated[User, Depends(get_current_user)],
+    path: str = Query(MEDIA_ROOT, description="Directory path to browse"),
+):
+    """List subdirectories at the given path for scan location selection."""
+    # Resolve and validate the path is under media root
+    try:
+        resolved = Path(path).resolve()
+        media_root = Path(MEDIA_ROOT).resolve()
+        if not str(resolved).startswith(str(media_root)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Path must be under /media/",
+            )
+    except (ValueError, OSError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    if not resolved.exists() or not resolved.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Directory not found",
+        )
+
+    directories = []
+    try:
+        for entry in sorted(resolved.iterdir()):
+            if entry.is_dir() and not entry.name.startswith("."):
+                directories.append(
+                    DirectoryEntry(name=entry.name, path=str(entry))
+                )
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied",
+        )
+
+    return DirectoryBrowseResponse(
+        current_path=str(resolved),
+        directories=directories,
+    )
 
 
 # ============== Scan Locations ==============
@@ -66,7 +121,7 @@ async def create_scan_location(
     new_location = ScanLocation(
         path=location.path,
         label=location.label,
-        is_anime_folder=location.is_anime_folder,
+        media_type=location.media_type,
         enabled=location.enabled,
     )
     db.add(new_location)
@@ -118,8 +173,8 @@ async def update_scan_location(
 
     if updates.label is not None:
         location.label = updates.label
-    if updates.is_anime_folder is not None:
-        location.is_anime_folder = updates.is_anime_folder
+    if updates.media_type is not None:
+        location.media_type = updates.media_type
     if updates.enabled is not None:
         location.enabled = updates.enabled
 
@@ -209,7 +264,7 @@ async def start_scan(
     background_tasks.add_task(
         run_scan,
         locations=[loc.path for loc in locations],
-        location_anime_flags={loc.path: loc.is_anime_folder for loc in locations},
+        location_media_types={loc.path: loc.media_type for loc in locations},
         incremental=request.incremental,
         user_plex_token=current_user.plex_token,
     )

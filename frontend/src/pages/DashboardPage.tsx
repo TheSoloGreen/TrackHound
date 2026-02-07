@@ -1,12 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Tv,
+  Layers,
   Film,
+  Tv,
   AlertTriangle,
   Play,
   Square,
   RefreshCw,
-  Languages,
+  FileVideo,
+  Sparkles,
 } from 'lucide-react'
 import { mediaApi, scanApi } from '../api/client'
 import type { DashboardStats, ScanStatus } from '../types'
@@ -63,7 +65,6 @@ export default function DashboardPage() {
       return response.data
     },
     refetchInterval: (query) => {
-      // Poll more frequently when scan is running
       return query.state.data?.is_running ? 2000 : 10000
     },
   })
@@ -74,7 +75,6 @@ export default function DashboardPage() {
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
     onError: () => {
-      // Refresh status on error in case the scan state changed
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
   })
@@ -173,15 +173,15 @@ export default function DashboardPage() {
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          icon={Tv}
-          label="Total Shows"
-          value={statsLoading ? '...' : stats?.total_shows || 0}
+          icon={Layers}
+          label="Total Titles"
+          value={statsLoading ? '...' : stats?.total_titles || 0}
           color="blue"
         />
         <StatCard
-          icon={Film}
-          label="Total Episodes"
-          value={statsLoading ? '...' : stats?.total_episodes || 0}
+          icon={FileVideo}
+          label="Total Files"
+          value={statsLoading ? '...' : stats?.total_files || 0}
           color="green"
         />
         <StatCard
@@ -191,8 +191,8 @@ export default function DashboardPage() {
           color="red"
         />
         <StatCard
-          icon={Languages}
-          label="Anime Shows"
+          icon={Sparkles}
+          label="Anime Titles"
           value={statsLoading ? '...' : stats?.anime_count || 0}
           color="purple"
         />
@@ -207,30 +207,51 @@ export default function DashboardPage() {
           </h2>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <span className="text-gray-600 dark:text-gray-400">Non-Anime Shows</span>
+              <div className="flex items-center gap-2">
+                <Film className="w-4 h-4 text-blue-500" />
+                <span className="text-gray-600 dark:text-gray-400">Movies</span>
+              </div>
               <span className="font-semibold text-gray-900 dark:text-white">
-                {stats?.non_anime_count || 0}
+                {stats?.movie_count || 0}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-600 dark:text-gray-400">Anime Shows</span>
+              <div className="flex items-center gap-2">
+                <Tv className="w-4 h-4 text-emerald-500" />
+                <span className="text-gray-600 dark:text-gray-400">TV Shows</span>
+              </div>
+              <span className="font-semibold text-gray-900 dark:text-white">
+                {stats?.tv_count || 0}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-purple-500" />
+                <span className="text-gray-600 dark:text-gray-400">Anime</span>
+              </div>
               <span className="font-semibold text-gray-900 dark:text-white">
                 {stats?.anime_count || 0}
               </span>
             </div>
             <div className="h-4 flex rounded-full overflow-hidden bg-gray-200 dark:bg-gray-700">
-              {stats && stats.total_shows > 0 && (
+              {stats && stats.total_titles > 0 && (
                 <>
                   <div
                     className="bg-blue-500"
                     style={{
-                      width: `${(stats.non_anime_count / stats.total_shows) * 100}%`,
+                      width: `${(stats.movie_count / stats.total_titles) * 100}%`,
+                    }}
+                  />
+                  <div
+                    className="bg-emerald-500"
+                    style={{
+                      width: `${(stats.tv_count / stats.total_titles) * 100}%`,
                     }}
                   />
                   <div
                     className="bg-purple-500"
                     style={{
-                      width: `${(stats.anime_count / stats.total_shows) * 100}%`,
+                      width: `${(stats.anime_count / stats.total_titles) * 100}%`,
                     }}
                   />
                 </>
