@@ -10,6 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 _INSECURE_DEFAULT_KEY = "change-me-in-production-use-openssl-rand-hex-32"
+_INSECURE_DEFAULT_ENCRYPTION_KEY = "change-me-trackhound-encryption-key"
 
 
 class Settings(BaseSettings):
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = _INSECURE_DEFAULT_KEY
+    encryption_key: str = _INSECURE_DEFAULT_ENCRYPTION_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
 
@@ -61,6 +63,18 @@ class Settings(BaseSettings):
             warnings.warn(
                 "Using default SECRET_KEY — set a secure value before deploying. "
                 "Generate one with: openssl rand -hex 32",
+                stacklevel=2,
+            )
+
+        if self.encryption_key == _INSECURE_DEFAULT_ENCRYPTION_KEY:
+            if self.environment == "production":
+                raise ValueError(
+                    "ENCRYPTION_KEY must be set to a secure value in production. "
+                    "Generate one with: openssl rand -base64 32"
+                )
+            warnings.warn(
+                "Using default ENCRYPTION_KEY — set a secure value before deploying. "
+                "Generate one with: openssl rand -base64 32",
                 stacklevel=2,
             )
 
