@@ -40,6 +40,15 @@ class User(Base):
     preferences: Mapped[list["UserPreference"]] = relationship(
         "UserPreference", back_populates="user", cascade="all, delete-orphan"
     )
+    shows: Mapped[list["Show"]] = relationship(
+        "Show", back_populates="user", cascade="all, delete-orphan"
+    )
+    media_files: Mapped[list["MediaFile"]] = relationship(
+        "MediaFile", back_populates="user", cascade="all, delete-orphan"
+    )
+    scan_locations: Mapped[list["ScanLocation"]] = relationship(
+        "ScanLocation", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserPreference(Base):
@@ -64,6 +73,9 @@ class Show(Base):
     __tablename__ = "shows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     media_type: Mapped[str] = mapped_column(
         String(20), default="tv", nullable=False
@@ -83,6 +95,7 @@ class Show(Base):
     )
 
     # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="shows")
     seasons: Mapped[list["Season"]] = relationship(
         "Season", back_populates="show", cascade="all, delete-orphan"
     )
@@ -120,6 +133,9 @@ class MediaFile(Base):
     __tablename__ = "media_files"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     show_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("shows.id", ondelete="SET NULL"), nullable=True
     )
@@ -141,6 +157,7 @@ class MediaFile(Base):
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="media_files")
     show: Mapped[Optional["Show"]] = relationship(
         "Show", back_populates="media_files", foreign_keys=[show_id]
     )
@@ -188,7 +205,10 @@ class ScanLocation(Base):
     __tablename__ = "scan_locations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    path: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     media_type: Mapped[str] = mapped_column(
         String(20), default="tv", nullable=False
@@ -199,3 +219,6 @@ class ScanLocation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, nullable=False
     )
+
+    # Relationships
+    user: Mapped["User"] = relationship("User", back_populates="scan_locations")

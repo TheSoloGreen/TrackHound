@@ -74,22 +74,28 @@ async def get_dashboard_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Get dashboard statistics."""
-    total_titles = await db.scalar(select(func.count(Show.id))) or 0
+    total_titles = await db.scalar(
+        select(func.count(Show.id)).where(Show.user_id == current_user.id)
+    ) or 0
 
     movie_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "movie")
+        select(func.count(Show.id)).where(Show.media_type == "movie", Show.user_id == current_user.id)
     ) or 0
     tv_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "tv")
+        select(func.count(Show.id)).where(Show.media_type == "tv", Show.user_id == current_user.id)
     ) or 0
     anime_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "anime")
+        select(func.count(Show.id)).where(Show.media_type == "anime", Show.user_id == current_user.id)
     ) or 0
 
-    total_files = await db.scalar(select(func.count(MediaFile.id))) or 0
+    total_files = await db.scalar(
+        select(func.count(MediaFile.id)).where(MediaFile.user_id == current_user.id)
+    ) or 0
 
     files_with_issues = await db.scalar(
-        select(func.count(MediaFile.id)).where(MediaFile.has_issues == True)
+        select(func.count(MediaFile.id)).where(
+            MediaFile.has_issues == True, MediaFile.user_id == current_user.id
+        )
     ) or 0
 
     return DashboardStats(
@@ -124,19 +130,24 @@ async def list_shows(
     # Subqueries for season-based counts (TV/anime)
     season_count_sq = (
         select(Season.show_id, func.count(Season.id).label("season_count"))
+        .join(Show, Show.id == Season.show_id)
+        .where(Show.user_id == current_user.id)
         .group_by(Season.show_id)
         .subquery()
     )
     episode_count_sq = (
         select(Season.show_id, func.count(MediaFile.id).label("episode_count"))
         .join(MediaFile, MediaFile.season_id == Season.id)
+        .join(Show, Show.id == Season.show_id)
+        .where(Show.user_id == current_user.id, MediaFile.user_id == current_user.id)
         .group_by(Season.show_id)
         .subquery()
     )
     season_issues_sq = (
         select(Season.show_id, func.count(MediaFile.id).label("season_issues"))
         .join(MediaFile, MediaFile.season_id == Season.id)
-        .where(MediaFile.has_issues == True)
+        .join(Show, Show.id == Season.show_id)
+        .where(MediaFile.has_issues == True, Show.user_id == current_user.id, MediaFile.user_id == current_user.id)
         .group_by(Season.show_id)
         .subquery()
     )
@@ -147,7 +158,11 @@ async def list_shows(
             MediaFile.show_id,
             func.count(MediaFile.id).label("direct_file_count"),
         )
-        .where(MediaFile.show_id.isnot(None), MediaFile.season_id.is_(None))
+        .where(
+            MediaFile.show_id.isnot(None),
+            MediaFile.season_id.is_(None),
+            MediaFile.user_id == current_user.id,
+        )
         .group_by(MediaFile.show_id)
         .subquery()
     )
@@ -160,6 +175,7 @@ async def list_shows(
             MediaFile.show_id.isnot(None),
             MediaFile.season_id.is_(None),
             MediaFile.has_issues == True,
+            MediaFile.user_id == current_user.id,
         )
         .group_by(MediaFile.show_id)
         .subquery()
@@ -180,7 +196,7 @@ async def list_shows(
         .outerjoin(season_issues_sq, season_issues_sq.c.show_id == Show.id)
         .outerjoin(direct_file_count_sq, direct_file_count_sq.c.show_id == Show.id)
         .outerjoin(direct_issues_sq, direct_issues_sq.c.show_id == Show.id)
-    )
+    ).where(Show.user_id == current_user.id)
 
     # Apply filters
     filters = []
@@ -261,7 +277,7 @@ async def get_show(
             selectinload(Show.seasons),
             selectinload(Show.media_files).selectinload(MediaFile.audio_tracks),
         )
-        .where(Show.id == show_id)
+        .where(Show.id == show_id, Show.user_id == current_user.id)
     )
     show = result.scalar_one_or_none()
 
@@ -285,7 +301,10 @@ async def get_show(
                 func.count(MediaFile.id).label("episode_count"),
                 func.count(MediaFile.id).filter(MediaFile.has_issues == True).label("issues_count"),
             )
-            .where(MediaFile.season_id.in_(season_ids))
+            .where(
+                MediaFile.season_id.in_(season_ids),
+                MediaFile.user_id == current_user.id,
+            )
             .group_by(MediaFile.season_id)
         )
         for row in count_result.all():
@@ -335,7 +354,7 @@ async def update_show(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Update title properties."""
-    result = await db.execute(select(Show).where(Show.id == show_id))
+    result = await db.execute(select(Show).where(Show.id == show_id, Show.user_id == current_user.id))
     show = result.scalar_one_or_none()
 
     if not show:
@@ -364,11 +383,16 @@ async def update_show(
         select(func.count(Season.id)).where(Season.show_id == show.id)
     ) or 0
     episode_count = await db.scalar(
-        select(func.count(MediaFile.id)).join(Season).where(Season.show_id == show.id)
+        select(func.count(MediaFile.id)).join(Season).where(
+            Season.show_id == show.id,
+            MediaFile.user_id == current_user.id,
+        )
     ) or 0
     file_count = await db.scalar(
         select(func.count(MediaFile.id)).where(
-            MediaFile.show_id == show.id, MediaFile.season_id.is_(None)
+            MediaFile.show_id == show.id,
+            MediaFile.season_id.is_(None),
+            MediaFile.user_id == current_user.id,
         )
     ) or 0
     issues_count = await db.scalar(
@@ -378,6 +402,7 @@ async def update_show(
                 and_(MediaFile.show_id == show.id, MediaFile.season_id.is_(None)),
             ),
             MediaFile.has_issues == True,
+            MediaFile.user_id == current_user.id,
         )
     ) or 0
 
@@ -411,7 +436,11 @@ async def get_season(
     result = await db.execute(
         select(Season)
         .options(selectinload(Season.media_files).selectinload(MediaFile.audio_tracks))
-        .where(Season.show_id == show_id, Season.season_number == season_number)
+        .where(
+            Season.show_id == show_id,
+            Season.season_number == season_number,
+            Season.show.has(Show.user_id == current_user.id),
+        )
     )
     season = result.scalar_one_or_none()
 
@@ -449,7 +478,9 @@ async def list_media_files(
     search: Optional[str] = None,
 ):
     """List media files with pagination and filters."""
-    query = select(MediaFile).options(selectinload(MediaFile.audio_tracks))
+    query = select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(
+        MediaFile.user_id == current_user.id
+    )
 
     filters = []
     if has_issues is not None:
@@ -459,7 +490,10 @@ async def list_media_files(
         filters.append(
             or_(
                 MediaFile.season_id.in_(
-                    select(Season.id).where(Season.show_id == show_id)
+                    select(Season.id).where(
+                        Season.show_id == show_id,
+                        Season.show.has(Show.user_id == current_user.id),
+                    )
                 ),
                 MediaFile.show_id == show_id,
             )
@@ -499,7 +533,7 @@ async def get_media_file(
     result = await db.execute(
         select(MediaFile)
         .options(selectinload(MediaFile.audio_tracks))
-        .where(MediaFile.id == file_id)
+        .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
     )
     mf = result.scalar_one_or_none()
 
