@@ -1,10 +1,8 @@
 """Media file scanner for discovering and processing media files."""
 
-import asyncio
 import logging
 import os
 import re
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -17,21 +15,9 @@ from app.models.entities import MediaFile, Show, Season, ScanLocation
 from app.core.analyzer import AudioAnalyzer
 from app.core.plex_connector import PlexConnector
 from app.core.preference_engine import PreferenceEngine
+from app.core.scan_state import scan_state_manager
 
 logger = logging.getLogger(__name__)
-
-# Scan state with lock for thread safety
-_scan_lock = threading.Lock()
-_cancel_requested = False
-_scan_status = {
-    "is_running": False,
-    "current_location": None,
-    "files_scanned": 0,
-    "files_total": 0,
-    "current_file": None,
-    "started_at": None,
-    "errors": [],
-}
 
 # Default supported extensions
 DEFAULT_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv"}
@@ -45,33 +31,6 @@ SHOW_PATTERNS = [
     # Show Name - S01E01 - Title.mkv
     re.compile(r"^(?P<show>.+?)\s*-\s*[Ss](?P<season>\d+)[Ee](?P<episode>\d+)", re.IGNORECASE),
 ]
-
-
-def cancel_current_scan() -> None:
-    """Request cancellation of the current scan."""
-    global _cancel_requested
-    with _scan_lock:
-        _cancel_requested = True
-
-
-def get_scan_status() -> dict:
-    """Get the current scan status."""
-    with _scan_lock:
-        return _scan_status.copy()
-
-
-def _update_scan_status(**kwargs) -> None:
-    """Update scan status in a thread-safe manner."""
-    with _scan_lock:
-        _scan_status.update(kwargs)
-        # Also update the API module's state
-        try:
-            from app.api.scan import _scan_state
-            for key, value in kwargs.items():
-                if hasattr(_scan_state, key):
-                    setattr(_scan_state, key, value)
-        except ImportError:
-            pass
 
 
 def parse_show_info(file_path: str, base_path: str) -> dict:
@@ -349,11 +308,7 @@ class MediaScanner:
             
         except Exception as e:
             logger.error("Error processing file %s: %s", file_path, e)
-            with _scan_lock:
-                current_errors = list(_scan_status["errors"])
-            _update_scan_status(
-                errors=current_errors + [f"{file_path}: {str(e)}"]
-            )
+            await scan_state_manager.append_error(f"{file_path}: {str(e)}")
             return None
 
 
@@ -364,10 +319,7 @@ async def run_scan(
     user_plex_token: Optional[str] = None,
 ) -> None:
     """Run a scan on the specified locations."""
-    global _cancel_requested
-    _cancel_requested = False
-    
-    _update_scan_status(
+    await scan_state_manager.update_status(
         is_running=True,
         files_scanned=0,
         files_total=0,
@@ -375,47 +327,43 @@ async def run_scan(
         started_at=datetime.now(timezone.utc),
         errors=[],
     )
-    
+
     scanner = MediaScanner(plex_token=user_plex_token)
-    
+
     try:
         # Discover all files first
         all_files = []
         for location in locations:
-            _update_scan_status(current_location=location)
+            await scan_state_manager.update_status(current_location=location)
             try:
                 files = scanner.discover_files(location)
                 media_type = location_media_types.get(location, "tv")
                 all_files.extend([(f, location, media_type) for f in files])
             except Exception as e:
                 logger.error("Error discovering files in %s: %s", location, e)
-                with _scan_lock:
-                    current_errors = list(_scan_status["errors"])
-                _update_scan_status(
-                    errors=current_errors + [f"Error scanning {location}: {str(e)}"]
-                )
-        
-        _update_scan_status(files_total=len(all_files))
-        
+                await scan_state_manager.append_error(f"Error scanning {location}: {str(e)}")
+
+        await scan_state_manager.update_status(files_total=len(all_files))
+
         # Process files
         async with async_session_maker() as db:
             for i, (file_path, base_path, media_type) in enumerate(all_files):
-                if _cancel_requested:
+                if await scan_state_manager.is_cancel_requested():
                     break
-                
-                _update_scan_status(
+
+                await scan_state_manager.update_status(
                     files_scanned=i + 1,
                     current_file=os.path.basename(file_path),
                 )
-                
+
                 await scanner.process_file(file_path, base_path, media_type, db)
-                
+
                 # Commit periodically
                 if (i + 1) % 50 == 0:
                     await db.commit()
-            
+
             await db.commit()
-            
+
             # Update scan location stats
             for location in locations:
                 result = await db.execute(
@@ -430,12 +378,8 @@ async def run_scan(
                         )
                     ) or 0
                     scan_loc.file_count = file_count
-            
+
             await db.commit()
-    
+
     finally:
-        _update_scan_status(
-            is_running=False,
-            current_location=None,
-            current_file=None,
-        )
+        await scan_state_manager.finish_scan()
