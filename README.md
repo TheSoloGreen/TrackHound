@@ -120,6 +120,28 @@ DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
 
 When running, visit `/docs` for interactive API documentation (Swagger UI).
 
+## Contributing Without Merge Conflicts
+
+If your pull request frequently shows conflicts, keep your branch synced before you push:
+
+```bash
+# From your feature branch
+git fetch origin
+git rebase origin/main
+
+# Resolve any conflicts, then continue
+git add <resolved-files>
+git rebase --continue
+
+# Update your remote branch after rebase
+git push --force-with-lease
+```
+
+Tips:
+- Make smaller PRs to reduce overlap with other changes.
+- Rebase right before opening a PR (and again before merge if the branch gets stale).
+- Avoid committing generated files unless they are required by the project.
+
 ## License
 
 MIT
