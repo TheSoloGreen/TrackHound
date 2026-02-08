@@ -4,21 +4,23 @@ import asyncio
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
-from sqlalchemy import select, delete
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.models.database import get_db
-from app.models.entities import User, ScanLocation
+from app.models.entities import ScanLocation, User
 from app.models.schemas import (
     DirectoryBrowseResponse,
     DirectoryEntry,
     ScanLocationCreate,
-    ScanLocationUpdate,
     ScanLocationResponse,
-    ScanStatus,
+    ScanLocationUpdate,
+    ScanMediaType,
     ScanStartRequest,
+    ScanStatus,
+    validate_media_root_path,
 )
 
 router = APIRouter()
@@ -29,6 +31,24 @@ _scan_lock = asyncio.Lock()
 
 # Root path for directory browsing (security boundary)
 MEDIA_ROOT = "/media"
+
+
+def _invalid_scan_input(message: str) -> HTTPException:
+    """Build a consistent invalid input error response."""
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Invalid scan location input: {message}",
+    )
+
+
+def _validate_scan_media_type(media_type: str | ScanMediaType) -> str:
+    """Defensively validate media type before persistence."""
+    try:
+        return ScanMediaType(media_type).value
+    except ValueError as exc:
+        raise _invalid_scan_input(
+            "media_type must be one of: tv, movie, anime."
+        ) from exc
 
 
 def get_scan_state() -> ScanStatus:
@@ -45,21 +65,12 @@ async def browse_directories(
     path: str = Query(MEDIA_ROOT, description="Directory path to browse"),
 ):
     """List subdirectories at the given path for scan location selection."""
-    # Resolve and validate the path is under media root
     try:
-        resolved = Path(path).resolve()
-        media_root = Path(MEDIA_ROOT).resolve()
-        if not str(resolved).startswith(str(media_root)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Path must be under /media/",
-            )
-    except (ValueError, OSError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid path",
-        )
+        resolved_path = validate_media_root_path(path)
+    except ValueError as exc:
+        raise _invalid_scan_input(str(exc)) from exc
 
+    resolved = Path(resolved_path)
     if not resolved.exists() or not resolved.is_dir():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -106,9 +117,16 @@ async def create_scan_location(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Add a new scan location."""
+    # Defensive validation before persistence
+    try:
+        normalized_path = validate_media_root_path(location.path)
+    except ValueError as exc:
+        raise _invalid_scan_input(str(exc)) from exc
+    media_type = _validate_scan_media_type(location.media_type)
+
     # Check if path already exists
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.path == location.path)
+        select(ScanLocation).where(ScanLocation.path == normalized_path)
     )
     existing = result.scalar_one_or_none()
 
@@ -119,9 +137,9 @@ async def create_scan_location(
         )
 
     new_location = ScanLocation(
-        path=location.path,
+        path=normalized_path,
         label=location.label,
-        media_type=location.media_type,
+        media_type=media_type,
         enabled=location.enabled,
     )
     db.add(new_location)
@@ -174,7 +192,7 @@ async def update_scan_location(
     if updates.label is not None:
         location.label = updates.label
     if updates.media_type is not None:
-        location.media_type = updates.media_type
+        location.media_type = _validate_scan_media_type(updates.media_type)
     if updates.enabled is not None:
         location.enabled = updates.enabled
 

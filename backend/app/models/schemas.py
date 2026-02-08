@@ -1,9 +1,44 @@
 """Pydantic schemas for API request/response models."""
 
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+MEDIA_ROOT = Path("/media").resolve()
+
+
+class ScanMediaType(str, Enum):
+    """Allowed scan media types."""
+
+    TV = "tv"
+    MOVIE = "movie"
+    ANIME = "anime"
+
+
+def validate_media_root_path(path: str) -> str:
+    """Validate a normalized absolute path that must stay under /media."""
+    try:
+        resolved = Path(path).resolve()
+    except (TypeError, ValueError, OSError) as exc:
+        raise ValueError("Path is invalid. Provide an absolute, normalized path under /media.") from exc
+
+    if not resolved.is_absolute():
+        raise ValueError("Path must be absolute and under /media.")
+
+    try:
+        resolved.relative_to(MEDIA_ROOT)
+    except ValueError as exc:
+        raise ValueError("Path must be under /media.") from exc
+
+    normalized = str(resolved)
+    if path != normalized:
+        raise ValueError(f"Path must be normalized. Use '{normalized}'.")
+
+    return normalized
 
 
 # ============== Auth Schemas ==============
@@ -45,15 +80,21 @@ class ScanLocationCreate(BaseModel):
 
     path: str
     label: str
-    media_type: str = "tv"  # tv, movie, anime
+    media_type: ScanMediaType = ScanMediaType.TV
     enabled: bool = True
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        """Require normalized scan locations under /media."""
+        return validate_media_root_path(value)
 
 
 class ScanLocationUpdate(BaseModel):
     """Update an existing scan location."""
 
     label: Optional[str] = None
-    media_type: Optional[str] = None
+    media_type: Optional[ScanMediaType] = None
     enabled: Optional[bool] = None
 
 
