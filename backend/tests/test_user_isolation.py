@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 from app.api.auth import get_current_user
 from app.api.media import router as media_router
 from app.api.scan import router as scan_router
+from app.core.scan_state import scan_state_manager
 from app.models.database import get_db
 from app.models.entities import Base, User, Show, ScanLocation
 
@@ -13,7 +14,9 @@ from app.models.entities import Base, User, Show, ScanLocation
 @pytest.fixture
 async def test_app():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    session_maker = async_sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -39,9 +42,17 @@ async def test_app():
         session.add_all([user_a, user_b])
         await session.flush()
 
-        show_b = Show(user_id=user_b.id, title="Other User Show", media_type="tv", is_anime=False)
+        show_b = Show(
+            user_id=user_b.id, title="Other User Show", media_type="tv", is_anime=False
+        )
         session.add(show_b)
-        scan_b = ScanLocation(user_id=user_b.id, path="/media/user-b", label="B", media_type="tv", enabled=True)
+        scan_b = ScanLocation(
+            user_id=user_b.id,
+            path="/media/user-b",
+            label="B",
+            media_type="tv",
+            enabled=True,
+        )
         session.add(scan_b)
         await session.commit()
 
@@ -55,6 +66,13 @@ async def test_app():
     yield app, users
 
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+async def reset_scan_state():
+    await scan_state_manager.reset()
+    yield
+    await scan_state_manager.reset()
 
 
 @pytest.mark.anyio
@@ -107,7 +125,9 @@ async def test_user_cannot_access_other_users_scan_locations(test_app):
 
 
 @pytest.mark.anyio
-async def test_create_scan_location_enforces_per_user_path_uniqueness_and_ownership(test_app):
+async def test_create_scan_location_enforces_per_user_path_uniqueness_and_ownership(
+    test_app,
+):
     app, users = test_app
 
     async def current_user_a():
@@ -170,7 +190,6 @@ async def test_create_scan_location_enforces_per_user_path_uniqueness_and_owners
         assert get_b_as_a_resp.status_code == 404
 
 
-
 @pytest.mark.anyio
 async def test_user_cannot_start_scan_with_other_users_location_ids(test_app):
     app, users = test_app
@@ -206,3 +225,56 @@ async def test_user_cannot_start_scan_all_on_only_other_users_locations(test_app
         )
         assert start_resp.status_code == 400
         assert start_resp.json()["detail"] == "No enabled scan locations found"
+
+
+@pytest.mark.anyio
+async def test_scan_status_is_isolated_per_user(test_app):
+    app, users = test_app
+
+    async def current_user_a():
+        return users["a"]
+
+    async def current_user_b():
+        return users["b"]
+
+    await scan_state_manager.start_scan(users["a"].id)
+    await scan_state_manager.start_scan(users["b"].id)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        app.dependency_overrides[get_current_user] = current_user_a
+        status_a_resp = await client.get("/api/scan/status")
+        assert status_a_resp.status_code == 200
+        assert status_a_resp.json()["is_running"] is True
+
+        app.dependency_overrides[get_current_user] = current_user_b
+        status_b_resp = await client.get("/api/scan/status")
+        assert status_b_resp.status_code == 200
+        assert status_b_resp.json()["is_running"] is True
+
+
+@pytest.mark.anyio
+async def test_user_cannot_cancel_another_users_scan(test_app):
+    app, users = test_app
+
+    async def current_user_a():
+        return users["a"]
+
+    async def current_user_b():
+        return users["b"]
+
+    await scan_state_manager.start_scan(users["a"].id)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        app.dependency_overrides[get_current_user] = current_user_b
+        cancel_b_resp = await client.post("/api/scan/cancel")
+        assert cancel_b_resp.status_code == 400
+
+        app.dependency_overrides[get_current_user] = current_user_a
+        status_a_resp = await client.get("/api/scan/status")
+        assert status_a_resp.status_code == 200
+        assert status_a_resp.json()["is_running"] is True
+
+        cancel_a_resp = await client.post("/api/scan/cancel")
+        assert cancel_a_resp.status_code == 200

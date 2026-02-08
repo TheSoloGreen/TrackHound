@@ -79,9 +79,7 @@ async def browse_directories(
     try:
         for entry in sorted(resolved.iterdir()):
             if entry.is_dir() and not entry.name.startswith("."):
-                directories.append(
-                    DirectoryEntry(name=entry.name, path=str(entry))
-                )
+                directories.append(DirectoryEntry(name=entry.name, path=str(entry)))
     except PermissionError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -112,7 +110,11 @@ async def list_scan_locations(
     return locations
 
 
-@router.post("/locations", response_model=ScanLocationResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/locations",
+    response_model=ScanLocationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def create_scan_location(
     location: ScanLocationCreate,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -251,7 +253,7 @@ async def get_scan_status(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Get current scan status."""
-    return await scan_state_manager.get_status()
+    return await scan_state_manager.get_status(current_user.id)
 
 
 @router.post("/start", response_model=ScanStatus)
@@ -295,7 +297,7 @@ async def start_scan(
             detail="No enabled scan locations found",
         )
 
-    started_status = await scan_state_manager.start_scan()
+    started_status = await scan_state_manager.start_scan(current_user.id)
     if started_status is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -323,7 +325,7 @@ async def cancel_scan(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Cancel the current scan."""
-    cancelled_status = await scan_state_manager.cancel_scan()
+    cancelled_status = await scan_state_manager.cancel_scan(current_user.id)
     if cancelled_status is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
