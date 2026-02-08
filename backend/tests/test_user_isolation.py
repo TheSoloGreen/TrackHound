@@ -104,3 +104,68 @@ async def test_user_cannot_access_other_users_scan_locations(test_app):
 
         delete_resp = await client.delete(f"/api/scan/locations/{users['scan_b_id']}")
         assert delete_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_create_scan_location_enforces_per_user_path_uniqueness_and_ownership(test_app):
+    app, users = test_app
+
+    async def current_user_a():
+        return users["a"]
+
+    async def current_user_b():
+        return users["b"]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        app.dependency_overrides[get_current_user] = current_user_a
+
+        create_a_resp = await client.post(
+            "/api/scan/locations",
+            json={
+                "path": "/media/shared/library",
+                "label": "A Shared",
+                "media_type": "tv",
+                "enabled": True,
+            },
+        )
+        assert create_a_resp.status_code == 201
+        created_a = create_a_resp.json()
+        assert created_a["path"] == "/media/shared/library"
+
+        duplicate_a_resp = await client.post(
+            "/api/scan/locations",
+            json={
+                "path": "/media/shared/library",
+                "label": "A Duplicate",
+                "media_type": "tv",
+                "enabled": True,
+            },
+        )
+        assert duplicate_a_resp.status_code == 400
+
+        app.dependency_overrides[get_current_user] = current_user_b
+
+        create_b_resp = await client.post(
+            "/api/scan/locations",
+            json={
+                "path": "/media/shared/library",
+                "label": "B Shared",
+                "media_type": "movie",
+                "enabled": True,
+            },
+        )
+        assert create_b_resp.status_code == 201
+        created_b = create_b_resp.json()
+
+        # Ownership check: user B cannot access user A's location, and can access their own.
+        get_a_as_b_resp = await client.get(f"/api/scan/locations/{created_a['id']}")
+        assert get_a_as_b_resp.status_code == 404
+
+        get_b_as_b_resp = await client.get(f"/api/scan/locations/{created_b['id']}")
+        assert get_b_as_b_resp.status_code == 200
+
+        app.dependency_overrides[get_current_user] = current_user_a
+        get_b_as_a_resp = await client.get(f"/api/scan/locations/{created_b['id']}")
+        assert get_b_as_a_resp.status_code == 404
+
