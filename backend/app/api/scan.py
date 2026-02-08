@@ -1,6 +1,5 @@
 """Scan API endpoints for managing scan locations and running scans."""
 
-import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -23,64 +22,12 @@ from app.models.schemas import (
     validate_media_root_path,
 )
 
-router = APIRouter()
+from app.core.scan_state import scan_state_manager
 
-# Global scan state with lock for thread safety
-_scan_state = ScanStatus(is_running=False)
-_scan_lock = asyncio.Lock()
+router = APIRouter()
 
 # Root path for directory browsing (security boundary)
 MEDIA_ROOT = "/media"
-
-
-def _invalid_scan_input(message: str) -> HTTPException:
-    """Build a consistent invalid input error response."""
-    return HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Invalid scan location input: {message}",
-    )
-
-
-def _validate_scan_media_type(media_type: str | ScanMediaType) -> str:
-    """Defensively validate media type before persistence."""
-    try:
-        return ScanMediaType(media_type).value
-    except ValueError as exc:
-        raise _invalid_scan_input(
-            "media_type must be one of: tv, movie, anime."
-        ) from exc
-
-
-def get_scan_state() -> ScanStatus:
-    """Get current scan state."""
-    return _scan_state
-
-
-def resolve_media_path(path: str) -> Path:
-    """Resolve and validate a filesystem path under MEDIA_ROOT."""
-    candidate = Path(path)
-    if not candidate.is_absolute():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path must be absolute",
-        )
-
-    try:
-        resolved = candidate.resolve()
-        media_root = Path(MEDIA_ROOT).resolve()
-        resolved.relative_to(media_root)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path must be under /media/",
-        )
-    except OSError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid path",
-        )
-
-    return resolved
 
 
 # ============== Directory Browsing ==============
@@ -276,7 +223,7 @@ async def get_scan_status(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Get current scan status."""
-    return _scan_state
+    return await scan_state_manager.get_status()
 
 
 @router.post("/start", response_model=ScanStatus)
@@ -287,42 +234,33 @@ async def start_scan(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Start a new scan."""
-    global _scan_state
-
-    async with _scan_lock:
-        if _scan_state.is_running:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A scan is already in progress",
+    # Get locations to scan
+    if request.location_ids:
+        result = await db.execute(
+            select(ScanLocation).where(
+                ScanLocation.id.in_(request.location_ids),
+                ScanLocation.enabled == True,
             )
+        )
+    else:
+        result = await db.execute(
+            select(ScanLocation).where(ScanLocation.enabled == True)
+        )
 
-        # Get locations to scan
-        if request.location_ids:
-            result = await db.execute(
-                select(ScanLocation).where(
-                    ScanLocation.id.in_(request.location_ids),
-                    ScanLocation.enabled == True,
-                    ScanLocation.user_id == current_user.id,
-                )
-            )
-        else:
-            result = await db.execute(
-                select(ScanLocation).where(
-                    ScanLocation.enabled == True,
-                    ScanLocation.user_id == current_user.id,
-                )
-            )
+    locations = result.scalars().all()
 
-        locations = result.scalars().all()
+    if not locations:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No enabled scan locations found",
+        )
 
-        if not locations:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No enabled scan locations found",
-            )
-
-        # Mark as running before releasing the lock
-        _scan_state.is_running = True
+    started_status = await scan_state_manager.start_scan()
+    if started_status is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A scan is already in progress",
+        )
 
     # Import here to avoid circular imports
     from app.core.scanner import run_scan
@@ -337,7 +275,7 @@ async def start_scan(
         user_plex_token=current_user.plex_token,
     )
 
-    return _scan_state
+    return started_status
 
 
 @router.post("/cancel", response_model=ScanStatus)
@@ -345,17 +283,11 @@ async def cancel_scan(
     current_user: Annotated[User, Depends(get_current_user)],
 ):
     """Cancel the current scan."""
-    global _scan_state
-
-    if not _scan_state.is_running:
+    cancelled_status = await scan_state_manager.cancel_scan()
+    if cancelled_status is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No scan is currently running",
         )
 
-    # Import here to avoid circular imports
-    from app.core.scanner import cancel_current_scan
-
-    cancel_current_scan()
-
-    return _scan_state
+    return cancelled_status
