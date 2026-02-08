@@ -169,3 +169,40 @@ async def test_create_scan_location_enforces_per_user_path_uniqueness_and_owners
         get_b_as_a_resp = await client.get(f"/api/scan/locations/{created_b['id']}")
         assert get_b_as_a_resp.status_code == 404
 
+
+
+@pytest.mark.anyio
+async def test_user_cannot_start_scan_with_other_users_location_ids(test_app):
+    app, users = test_app
+
+    async def override_current_user():
+        return users["a"]
+
+    app.dependency_overrides[get_current_user] = override_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        start_resp = await client.post(
+            "/api/scan/start",
+            json={"location_ids": [users["scan_b_id"]], "incremental": True},
+        )
+        assert start_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_user_cannot_start_scan_all_on_only_other_users_locations(test_app):
+    app, users = test_app
+
+    async def override_current_user():
+        return users["a"]
+
+    app.dependency_overrides[get_current_user] = override_current_user
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        start_resp = await client.post(
+            "/api/scan/start",
+            json={"incremental": True},
+        )
+        assert start_resp.status_code == 400
+        assert start_resp.json()["detail"] == "No enabled scan locations found"
