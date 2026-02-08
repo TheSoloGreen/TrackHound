@@ -36,6 +36,33 @@ def get_scan_state() -> ScanStatus:
     return _scan_state
 
 
+def resolve_media_path(path: str) -> Path:
+    """Resolve and validate a filesystem path under MEDIA_ROOT."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be absolute",
+        )
+
+    try:
+        resolved = candidate.resolve()
+        media_root = Path(MEDIA_ROOT).resolve()
+        resolved.relative_to(media_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be under /media/",
+        )
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    return resolved
+
+
 # ============== Directory Browsing ==============
 
 
@@ -45,20 +72,7 @@ async def browse_directories(
     path: str = Query(MEDIA_ROOT, description="Directory path to browse"),
 ):
     """List subdirectories at the given path for scan location selection."""
-    # Resolve and validate the path is under media root
-    try:
-        resolved = Path(path).resolve()
-        media_root = Path(MEDIA_ROOT).resolve()
-        if not str(resolved).startswith(str(media_root)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Path must be under /media/",
-            )
-    except (ValueError, OSError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid path",
-        )
+    resolved = resolve_media_path(path)
 
     if not resolved.exists() or not resolved.is_dir():
         raise HTTPException(
@@ -110,12 +124,11 @@ async def create_scan_location(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Add a new scan location."""
+    resolved_path = str(resolve_media_path(location.path))
+
     # Check if path already exists
     result = await db.execute(
-        select(ScanLocation).where(
-            ScanLocation.path == location.path,
-            ScanLocation.user_id == current_user.id,
-        )
+        select(ScanLocation).where(ScanLocation.path == resolved_path)
     )
     existing = result.scalar_one_or_none()
 
@@ -126,8 +139,7 @@ async def create_scan_location(
         )
 
     new_location = ScanLocation(
-        user_id=current_user.id,
-        path=location.path,
+        path=resolved_path,
         label=location.label,
         media_type=location.media_type,
         enabled=location.enabled,
