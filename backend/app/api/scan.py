@@ -55,6 +55,41 @@ def _validate_scan_media_type(value: ScanMediaType | str) -> str:
     raise _invalid_scan_input("media_type must be one of: tv, movie, anime.")
 
 
+def resolve_media_path(path: str) -> Path:
+    """Resolve and validate that a path stays within the scan media root.
+
+    This helper is retained for compatibility with unit tests and any legacy
+    callers that validate directory traversal constraints directly from this
+    module.
+    """
+    media_root = Path(MEDIA_ROOT).resolve()
+    candidate = Path(path)
+
+    if not candidate.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be absolute",
+        )
+
+    try:
+        resolved = candidate.resolve()
+    except (TypeError, ValueError, OSError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        ) from exc
+
+    try:
+        resolved.relative_to(media_root)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be under /media/",
+        ) from exc
+
+    return resolved
+
+
 # ============== Directory Browsing ==============
 
 
