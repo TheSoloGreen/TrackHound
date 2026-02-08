@@ -8,6 +8,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
+from app.core.encryption import decrypt_value
 from app.models.database import get_db
 from app.models.entities import ScanLocation, User
 from app.models.schemas import (
@@ -314,7 +315,7 @@ async def start_scan(
         location_media_types={loc.path: loc.media_type for loc in locations},
         incremental=request.incremental,
         user_id=current_user.id,
-        user_plex_token=current_user.plex_token,
+        user_plex_token=decrypt_value(current_user.plex_token),
     )
 
     return started_status

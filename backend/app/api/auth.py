@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.encryption import encrypt_value
 from app.models.database import get_db
 from app.models.entities import User
 from app.models.schemas import PlexPinResponse, TokenResponse, UserResponse
@@ -188,7 +189,7 @@ async def complete_plex_login(
             # Update existing user
             user.plex_username = plex_username
             user.plex_email = plex_email
-            user.plex_token = auth_token
+            user.plex_token = encrypt_value(auth_token)
             user.plex_thumb_url = plex_thumb
             user.last_login = datetime.now(timezone.utc)
         else:
@@ -197,7 +198,7 @@ async def complete_plex_login(
                 plex_user_id=plex_user_id,
                 plex_username=plex_username,
                 plex_email=plex_email,
-                plex_token=auth_token,
+                plex_token=encrypt_value(auth_token),
                 plex_thumb_url=plex_thumb,
             )
             db.add(user)

@@ -27,7 +27,7 @@ class User(Base):
     plex_user_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     plex_username: Mapped[str] = mapped_column(String(255), nullable=False)
     plex_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    plex_token: Mapped[str] = mapped_column(Text, nullable=False)  # Stored as plaintext — consider encrypting
+    plex_token: Mapped[str] = mapped_column(Text, nullable=False)
     plex_thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, nullable=False

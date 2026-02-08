@@ -5,6 +5,8 @@ from __future__ import annotations
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from app.core.encryption import encrypt_value, is_encrypted
+
 
 async def _ensure_bootstrap_user(conn: AsyncConnection) -> int:
     """Return an owner user id, creating a bootstrap owner when necessary."""
@@ -16,9 +18,10 @@ async def _ensure_bootstrap_user(conn: AsyncConnection) -> int:
         text(
             """
             INSERT INTO users (plex_user_id, plex_username, plex_email, plex_token, plex_thumb_url, created_at, last_login)
-            VALUES ('bootstrap-owner', 'bootstrap-owner', NULL, 'bootstrap-owner-token', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES ('bootstrap-owner', 'bootstrap-owner', NULL, :bootstrap_token, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """
-        )
+        ),
+        {"bootstrap_token": encrypt_value("bootstrap-owner-token")},
     )
 
     inserted_id = result.lastrowid
@@ -29,6 +32,19 @@ async def _ensure_bootstrap_user(conn: AsyncConnection) -> int:
         text("SELECT id FROM users WHERE plex_user_id = 'bootstrap-owner' LIMIT 1")
     )
     return int(owner_id)
+
+
+async def apply_token_encryption_migration(conn: AsyncConnection) -> None:
+    """Encrypt legacy plaintext Plex tokens in-place."""
+    result = await conn.execute(text("SELECT id, plex_token FROM users"))
+    users = result.fetchall()
+
+    for user_id, plex_token in users:
+        if plex_token and not is_encrypted(plex_token):
+            await conn.execute(
+                text("UPDATE users SET plex_token = :token WHERE id = :id"),
+                {"token": encrypt_value(plex_token), "id": user_id},
+            )
 
 
 async def apply_ownership_migrations(conn: AsyncConnection) -> None:
