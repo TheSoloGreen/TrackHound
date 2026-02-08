@@ -50,6 +50,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db() -> None:
     """Initialize database tables."""
     from app.models.entities import Base
+    from app.models.migrations import apply_ownership_migrations
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await apply_ownership_migrations(conn)

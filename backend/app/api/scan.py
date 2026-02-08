@@ -4,21 +4,23 @@ import asyncio
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
-from sqlalchemy import select, delete
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
 from app.models.database import get_db
-from app.models.entities import User, ScanLocation
+from app.models.entities import ScanLocation, User
 from app.models.schemas import (
     DirectoryBrowseResponse,
     DirectoryEntry,
     ScanLocationCreate,
-    ScanLocationUpdate,
     ScanLocationResponse,
-    ScanStatus,
+    ScanLocationUpdate,
+    ScanMediaType,
     ScanStartRequest,
+    ScanStatus,
+    validate_media_root_path,
 )
 
 router = APIRouter()
@@ -31,9 +33,54 @@ _scan_lock = asyncio.Lock()
 MEDIA_ROOT = "/media"
 
 
+def _invalid_scan_input(message: str) -> HTTPException:
+    """Build a consistent invalid input error response."""
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Invalid scan location input: {message}",
+    )
+
+
+def _validate_scan_media_type(media_type: str | ScanMediaType) -> str:
+    """Defensively validate media type before persistence."""
+    try:
+        return ScanMediaType(media_type).value
+    except ValueError as exc:
+        raise _invalid_scan_input(
+            "media_type must be one of: tv, movie, anime."
+        ) from exc
+
+
 def get_scan_state() -> ScanStatus:
     """Get current scan state."""
     return _scan_state
+
+
+def resolve_media_path(path: str) -> Path:
+    """Resolve and validate a filesystem path under MEDIA_ROOT."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be absolute",
+        )
+
+    try:
+        resolved = candidate.resolve()
+        media_root = Path(MEDIA_ROOT).resolve()
+        resolved.relative_to(media_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path must be under /media/",
+        )
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path",
+        )
+
+    return resolved
 
 
 # ============== Directory Browsing ==============
@@ -45,21 +92,12 @@ async def browse_directories(
     path: str = Query(MEDIA_ROOT, description="Directory path to browse"),
 ):
     """List subdirectories at the given path for scan location selection."""
-    # Resolve and validate the path is under media root
     try:
-        resolved = Path(path).resolve()
-        media_root = Path(MEDIA_ROOT).resolve()
-        if not str(resolved).startswith(str(media_root)):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Path must be under /media/",
-            )
-    except (ValueError, OSError):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid path",
-        )
+        resolved_path = validate_media_root_path(path)
+    except ValueError as exc:
+        raise _invalid_scan_input(str(exc)) from exc
 
+    resolved = Path(resolved_path)
     if not resolved.exists() or not resolved.is_dir():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -94,7 +132,11 @@ async def list_scan_locations(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """List all configured scan locations."""
-    result = await db.execute(select(ScanLocation).order_by(ScanLocation.label))
+    result = await db.execute(
+        select(ScanLocation)
+        .where(ScanLocation.user_id == current_user.id)
+        .order_by(ScanLocation.label)
+    )
     locations = result.scalars().all()
     return locations
 
@@ -106,9 +148,16 @@ async def create_scan_location(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Add a new scan location."""
+    # Defensive validation before persistence
+    try:
+        normalized_path = validate_media_root_path(location.path)
+    except ValueError as exc:
+        raise _invalid_scan_input(str(exc)) from exc
+    media_type = _validate_scan_media_type(location.media_type)
+
     # Check if path already exists
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.path == location.path)
+        select(ScanLocation).where(ScanLocation.path == normalized_path)
     )
     existing = result.scalar_one_or_none()
 
@@ -119,9 +168,9 @@ async def create_scan_location(
         )
 
     new_location = ScanLocation(
-        path=location.path,
+        path=normalized_path,
         label=location.label,
-        media_type=location.media_type,
+        media_type=media_type,
         enabled=location.enabled,
     )
     db.add(new_location)
@@ -139,7 +188,10 @@ async def get_scan_location(
 ):
     """Get a specific scan location."""
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.id == location_id)
+        select(ScanLocation).where(
+            ScanLocation.id == location_id,
+            ScanLocation.user_id == current_user.id,
+        )
     )
     location = result.scalar_one_or_none()
 
@@ -161,7 +213,10 @@ async def update_scan_location(
 ):
     """Update a scan location."""
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.id == location_id)
+        select(ScanLocation).where(
+            ScanLocation.id == location_id,
+            ScanLocation.user_id == current_user.id,
+        )
     )
     location = result.scalar_one_or_none()
 
@@ -174,7 +229,7 @@ async def update_scan_location(
     if updates.label is not None:
         location.label = updates.label
     if updates.media_type is not None:
-        location.media_type = updates.media_type
+        location.media_type = _validate_scan_media_type(updates.media_type)
     if updates.enabled is not None:
         location.enabled = updates.enabled
 
@@ -192,7 +247,10 @@ async def delete_scan_location(
 ):
     """Delete a scan location."""
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.id == location_id)
+        select(ScanLocation).where(
+            ScanLocation.id == location_id,
+            ScanLocation.user_id == current_user.id,
+        )
     )
     location = result.scalar_one_or_none()
 
@@ -202,7 +260,12 @@ async def delete_scan_location(
             detail="Scan location not found",
         )
 
-    await db.execute(delete(ScanLocation).where(ScanLocation.id == location_id))
+    await db.execute(
+        delete(ScanLocation).where(
+            ScanLocation.id == location_id,
+            ScanLocation.user_id == current_user.id,
+        )
+    )
 
 
 # ============== Scan Operations ==============
@@ -239,11 +302,15 @@ async def start_scan(
                 select(ScanLocation).where(
                     ScanLocation.id.in_(request.location_ids),
                     ScanLocation.enabled == True,
+                    ScanLocation.user_id == current_user.id,
                 )
             )
         else:
             result = await db.execute(
-                select(ScanLocation).where(ScanLocation.enabled == True)
+                select(ScanLocation).where(
+                    ScanLocation.enabled == True,
+                    ScanLocation.user_id == current_user.id,
+                )
             )
 
         locations = result.scalars().all()
@@ -266,6 +333,7 @@ async def start_scan(
         locations=[loc.path for loc in locations],
         location_media_types={loc.path: loc.media_type for loc in locations},
         incremental=request.incremental,
+        user_id=current_user.id,
         user_plex_token=current_user.plex_token,
     )
 
