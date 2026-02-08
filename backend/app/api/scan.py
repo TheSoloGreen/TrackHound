@@ -264,18 +264,30 @@ async def start_scan(
     """Start a new scan."""
     # Get locations to scan
     if request.location_ids:
+        requested_location_ids = set(request.location_ids)
         result = await db.execute(
             select(ScanLocation).where(
                 ScanLocation.id.in_(request.location_ids),
+                ScanLocation.user_id == current_user.id,
+            )
+        )
+        requested_locations = result.scalars().all()
+
+        if len(requested_locations) != len(requested_location_ids):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="One or more scan locations not found",
+            )
+
+        locations = [location for location in requested_locations if location.enabled]
+    else:
+        result = await db.execute(
+            select(ScanLocation).where(
+                ScanLocation.user_id == current_user.id,
                 ScanLocation.enabled == True,
             )
         )
-    else:
-        result = await db.execute(
-            select(ScanLocation).where(ScanLocation.enabled == True)
-        )
-
-    locations = result.scalars().all()
+        locations = result.scalars().all()
 
     if not locations:
         raise HTTPException(
