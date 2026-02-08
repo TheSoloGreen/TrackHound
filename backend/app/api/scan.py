@@ -126,9 +126,12 @@ async def create_scan_location(
         raise _invalid_scan_input(str(exc)) from exc
     media_type = _validate_scan_media_type(location.media_type)
 
-    # Check if path already exists
+    # Check if path already exists for the current user
     result = await db.execute(
-        select(ScanLocation).where(ScanLocation.path == normalized_path)
+        select(ScanLocation).where(
+            ScanLocation.user_id == current_user.id,
+            ScanLocation.path == normalized_path,
+        )
     )
     existing = result.scalar_one_or_none()
 
@@ -139,6 +142,7 @@ async def create_scan_location(
         )
 
     new_location = ScanLocation(
+        user_id=current_user.id,
         path=normalized_path,
         label=location.label,
         media_type=media_type,
