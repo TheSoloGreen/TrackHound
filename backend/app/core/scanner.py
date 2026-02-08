@@ -165,6 +165,7 @@ class MediaScanner:
         file_path: str,
         base_path: str,
         media_type: str,
+        user_id: int,
         db: AsyncSession,
     ) -> Optional[MediaFile]:
         """Process a single media file."""
@@ -174,7 +175,10 @@ class MediaScanner:
 
             # Check if file already exists in database
             result = await db.execute(
-                select(MediaFile).where(MediaFile.file_path == file_path)
+                select(MediaFile).where(
+                    MediaFile.file_path == file_path,
+                    MediaFile.user_id == user_id,
+                )
             )
             existing = result.scalar_one_or_none()
             
@@ -228,21 +232,24 @@ class MediaScanner:
                 # First try to find by Plex rating key
                 if plex_rating_key:
                     result = await db.execute(
-                        select(Show).where(Show.plex_rating_key == plex_rating_key)
+                        select(Show).where(
+                            Show.plex_rating_key == plex_rating_key,
+                            Show.user_id == user_id,
+                        )
                     )
                     show = result.scalar_one_or_none()
                 
                 # Then try by title
                 if not show:
                     result = await db.execute(
-                        select(Show).where(Show.title == show_title)
+                        select(Show).where(Show.title == show_title, Show.user_id == user_id)
                     )
                     show = result.scalar_one_or_none()
                 
                 # Check path-based title (handles English folder names)
                 if not show and show_info.get("show") and show_info["show"] != show_title:
                     result = await db.execute(
-                        select(Show).where(Show.title == show_info["show"])
+                        select(Show).where(Show.title == show_info["show"], Show.user_id == user_id)
                     )
                     existing_show = result.scalar_one_or_none()
                     if existing_show:
@@ -256,6 +263,7 @@ class MediaScanner:
                 
                 if not show:
                     show = Show(
+                        user_id=user_id,
                         title=show_title,
                         media_type=media_type,
                         plex_rating_key=plex_rating_key,
@@ -299,7 +307,7 @@ class MediaScanner:
                     delete(AudioTrack).where(AudioTrack.media_file_id == media_file.id)
                 )
             else:
-                media_file = MediaFile(file_path=file_path)
+                media_file = MediaFile(user_id=user_id, file_path=file_path)
                 db.add(media_file)
             
             # Update media file info
@@ -360,6 +368,7 @@ class MediaScanner:
 async def run_scan(
     locations: list[str],
     location_media_types: dict[str, str],
+    user_id: int,
     incremental: bool = True,
     user_plex_token: Optional[str] = None,
 ) -> None:
@@ -408,7 +417,7 @@ async def run_scan(
                     current_file=os.path.basename(file_path),
                 )
                 
-                await scanner.process_file(file_path, base_path, media_type, db)
+                await scanner.process_file(file_path, base_path, media_type, user_id, db)
                 
                 # Commit periodically
                 if (i + 1) % 50 == 0:
@@ -419,14 +428,18 @@ async def run_scan(
             # Update scan location stats
             for location in locations:
                 result = await db.execute(
-                    select(ScanLocation).where(ScanLocation.path == location)
+                    select(ScanLocation).where(
+                        ScanLocation.path == location,
+                        ScanLocation.user_id == user_id,
+                    )
                 )
                 scan_loc = result.scalar_one_or_none()
                 if scan_loc:
                     scan_loc.last_scanned = datetime.now(timezone.utc)
                     file_count = await db.scalar(
                         select(func.count(MediaFile.id)).where(
-                            MediaFile.file_path.like(f"{location}%")
+                            MediaFile.file_path.like(f"{location}%"),
+                            MediaFile.user_id == user_id,
                         )
                     ) or 0
                     scan_loc.file_count = file_count
