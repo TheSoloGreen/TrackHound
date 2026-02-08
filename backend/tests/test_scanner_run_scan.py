@@ -38,13 +38,22 @@ class RunScanArgumentPassingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await scan_state_manager.reset()
 
-    async def test_run_scan_single_file_calls_process_file_with_user_id_and_no_errors(self):
+    async def test_run_scan_single_file_calls_process_file_with_user_id_and_no_errors(
+        self,
+    ):
         file_path = "/media/tv/Show/Season 01/E01.mkv"
 
         with (
-            patch("app.core.scanner.MediaScanner.discover_files", return_value=[file_path]),
-            patch("app.core.scanner.MediaScanner.process_file", new_callable=AsyncMock) as process_file,
-            patch("app.core.scanner.async_session_maker", return_value=_FakeSessionContext()),
+            patch(
+                "app.core.scanner.MediaScanner.discover_files", return_value=[file_path]
+            ),
+            patch(
+                "app.core.scanner.MediaScanner.process_file", new_callable=AsyncMock
+            ) as process_file,
+            patch(
+                "app.core.scanner.async_session_maker",
+                return_value=_FakeSessionContext(),
+            ),
         ):
             await run_scan(
                 locations=["/media/tv"],
@@ -54,9 +63,11 @@ class RunScanArgumentPassingTests(unittest.IsolatedAsyncioTestCase):
             )
 
         process_file.assert_awaited_once()
-        process_file.assert_awaited_once_with(file_path, "/media/tv", "tv", 42, unittest.mock.ANY)
+        process_file.assert_awaited_once_with(
+            file_path, "/media/tv", "tv", 42, unittest.mock.ANY
+        )
 
-        status = await scan_state_manager.get_status()
+        status = await scan_state_manager.get_status(42)
         self.assertEqual(status.files_total, 1)
         self.assertEqual(status.files_scanned, 1)
         self.assertEqual(status.errors, [])

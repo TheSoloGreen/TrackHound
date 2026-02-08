@@ -25,23 +25,30 @@ DEFAULT_EXTENSIONS = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv"}
 # Regex patterns for parsing show/season/episode from file paths
 SHOW_PATTERNS = [
     # Show Name/Season 01/E01 - Title.mkv
-    re.compile(r"^(?P<show>.+?)[/\\]Season\s*(?P<season>\d+)[/\\].*?[Ee](?P<episode>\d+)", re.IGNORECASE),
+    re.compile(
+        r"^(?P<show>.+?)[/\\]Season\s*(?P<season>\d+)[/\\].*?[Ee](?P<episode>\d+)",
+        re.IGNORECASE,
+    ),
     # Show Name/S01E01 - Title.mkv
-    re.compile(r"^(?P<show>.+?)[/\\][Ss](?P<season>\d+)[Ee](?P<episode>\d+)", re.IGNORECASE),
+    re.compile(
+        r"^(?P<show>.+?)[/\\][Ss](?P<season>\d+)[Ee](?P<episode>\d+)", re.IGNORECASE
+    ),
     # Show Name - S01E01 - Title.mkv
-    re.compile(r"^(?P<show>.+?)\s*-\s*[Ss](?P<season>\d+)[Ee](?P<episode>\d+)", re.IGNORECASE),
+    re.compile(
+        r"^(?P<show>.+?)\s*-\s*[Ss](?P<season>\d+)[Ee](?P<episode>\d+)", re.IGNORECASE
+    ),
 ]
 
 
 def parse_show_info(file_path: str, base_path: str) -> dict:
     """
     Parse show, season, and episode information from a file path.
-    
+
     Returns a dict with keys: show, season, episode (all optional)
     """
     # Get relative path from base
     relative_path = os.path.relpath(file_path, base_path)
-    
+
     for pattern in SHOW_PATTERNS:
         match = pattern.search(relative_path)
         if match:
@@ -59,7 +66,7 @@ def parse_show_info(file_path: str, base_path: str) -> dict:
                 "season": season_num,
                 "episode": episode_num,
             }
-    
+
     # Fallback: use parent directory as show name
     parts = Path(relative_path).parts
     if len(parts) >= 2:
@@ -68,14 +75,14 @@ def parse_show_info(file_path: str, base_path: str) -> dict:
             "season": 1,
             "episode": None,
         }
-    
+
     return {"show": None, "season": None, "episode": None}
 
 
 def parse_movie_title(file_path: str, base_path: str) -> str:
     """
     Parse movie title from a file path.
-    
+
     For movies, the parent folder name is typically the movie title,
     or the filename itself if it's directly in the base path.
     """
@@ -107,16 +114,16 @@ class MediaScanner:
         """Discover all media files in a location."""
         files = []
         location_path = Path(location)
-        
+
         if not location_path.exists():
             raise ValueError(f"Location does not exist: {location}")
-        
+
         for root, _, filenames in os.walk(location_path):
             for filename in filenames:
                 ext = Path(filename).suffix.lower()
                 if ext in self.extensions:
                     files.append(os.path.join(root, filename))
-        
+
         return sorted(files)
 
     async def process_file(
@@ -140,18 +147,18 @@ class MediaScanner:
                 )
             )
             existing = result.scalar_one_or_none()
-            
+
             # Get file stats
             stat = os.stat(file_path)
             file_mtime = datetime.fromtimestamp(stat.st_mtime)
-            
+
             # Skip if file hasn't changed (incremental scan)
             if existing and existing.last_modified >= file_mtime:
                 return existing
-            
+
             # Analyze audio tracks
             audio_info = self.analyzer.analyze(file_path)
-            
+
             # Determine title and metadata based on media type
             if is_movie:
                 show_title = parse_movie_title(file_path, base_path)
@@ -159,7 +166,7 @@ class MediaScanner:
             else:
                 show_info = parse_show_info(file_path, base_path)
                 show_title = show_info.get("show")
-            
+
             # Try to get metadata from Plex first
             plex_metadata = None
             if self.plex_connector:
@@ -167,7 +174,7 @@ class MediaScanner:
                     file_path=file_path,
                     title_from_path=show_title,
                 )
-            
+
             # Determine final title and anime status
             if plex_metadata:
                 show_title = plex_metadata["title"]
@@ -182,11 +189,11 @@ class MediaScanner:
                 anime_source = "folder" if is_anime else None
                 plex_rating_key = None
                 thumb_url = None
-            
+
             # Find or create show
             show = None
             season = None
-            
+
             if show_title:
                 # First try to find by Plex rating key
                 if plex_rating_key:
@@ -197,18 +204,26 @@ class MediaScanner:
                         )
                     )
                     show = result.scalar_one_or_none()
-                
+
                 # Then try by title
                 if not show:
                     result = await db.execute(
-                        select(Show).where(Show.title == show_title, Show.user_id == user_id)
+                        select(Show).where(
+                            Show.title == show_title, Show.user_id == user_id
+                        )
                     )
                     show = result.scalar_one_or_none()
-                
+
                 # Check path-based title (handles English folder names)
-                if not show and show_info.get("show") and show_info["show"] != show_title:
+                if (
+                    not show
+                    and show_info.get("show")
+                    and show_info["show"] != show_title
+                ):
                     result = await db.execute(
-                        select(Show).where(Show.title == show_info["show"], Show.user_id == user_id)
+                        select(Show).where(
+                            Show.title == show_info["show"], Show.user_id == user_id
+                        )
                     )
                     existing_show = result.scalar_one_or_none()
                     if existing_show:
@@ -219,7 +234,7 @@ class MediaScanner:
                             show.is_anime = is_anime
                             show.anime_source = anime_source
                             show.thumb_url = thumb_url
-                
+
                 if not show:
                     show = Show(
                         user_id=user_id,
@@ -238,7 +253,7 @@ class MediaScanner:
                     show.anime_source = anime_source
                     if thumb_url:
                         show.thumb_url = thumb_url
-                
+
                 # Find or create season (TV/anime only)
                 if not is_movie and show_info.get("season"):
                     result = await db.execute(
@@ -248,7 +263,7 @@ class MediaScanner:
                         )
                     )
                     season = result.scalar_one_or_none()
-                    
+
                     if not season:
                         season = Season(
                             show_id=show.id,
@@ -256,34 +271,38 @@ class MediaScanner:
                         )
                         db.add(season)
                         await db.flush()
-            
+
             # Create or update media file
             if existing:
                 media_file = existing
                 from app.models.entities import AudioTrack
                 from sqlalchemy import delete
+
                 await db.execute(
                     delete(AudioTrack).where(AudioTrack.media_file_id == media_file.id)
                 )
             else:
                 media_file = MediaFile(user_id=user_id, file_path=file_path)
                 db.add(media_file)
-            
+
             # Update media file info
             media_file.filename = os.path.basename(file_path)
             media_file.show_id = show.id if show else None
             media_file.season_id = season.id if season else None
-            media_file.episode_number = show_info.get("episode") if not is_movie else None
+            media_file.episode_number = (
+                show_info.get("episode") if not is_movie else None
+            )
             media_file.file_size = stat.st_size
             media_file.container_format = audio_info.get("container")
             media_file.duration_ms = audio_info.get("duration_ms")
             media_file.last_scanned = datetime.now(timezone.utc)
             media_file.last_modified = file_mtime
-            
+
             await db.flush()
-            
+
             # Add audio tracks
             from app.models.entities import AudioTrack
+
             for track_info in audio_info.get("audio_tracks", []):
                 track = AudioTrack(
                     media_file_id=media_file.id,
@@ -299,24 +318,24 @@ class MediaScanner:
                     title=track_info.get("title"),
                 )
                 db.add(track)
-            
+
             await db.flush()
-            
+
             # Evaluate preferences and set issues
             final_is_anime = show.is_anime if show else is_anime
             issues = self.preference_engine.evaluate(
                 audio_info.get("audio_tracks", []),
                 is_anime=final_is_anime,
             )
-            
+
             media_file.has_issues = len(issues) > 0
             media_file.issue_details = "; ".join(issues) if issues else None
-            
+
             return media_file
-            
+
         except Exception as e:
             logger.error("Error processing file %s: %s", file_path, e)
-            await scan_state_manager.append_error(f"{file_path}: {str(e)}")
+            await scan_state_manager.append_error(user_id, f"{file_path}: {str(e)}")
             return None
 
 
@@ -329,6 +348,7 @@ async def run_scan(
 ) -> None:
     """Run a scan on the specified locations."""
     await scan_state_manager.update_status(
+        user_id,
         is_running=True,
         files_scanned=0,
         files_total=0,
@@ -343,29 +363,34 @@ async def run_scan(
         # Discover all files first
         all_files = []
         for location in locations:
-            await scan_state_manager.update_status(current_location=location)
+            await scan_state_manager.update_status(user_id, current_location=location)
             try:
                 files = scanner.discover_files(location)
                 media_type = location_media_types.get(location, "tv")
                 all_files.extend([(f, location, media_type) for f in files])
             except Exception as e:
                 logger.error("Error discovering files in %s: %s", location, e)
-                await scan_state_manager.append_error(f"Error scanning {location}: {str(e)}")
+                await scan_state_manager.append_error(
+                    user_id, f"Error scanning {location}: {str(e)}"
+                )
 
-        await scan_state_manager.update_status(files_total=len(all_files))
+        await scan_state_manager.update_status(user_id, files_total=len(all_files))
 
         # Process files
         async with async_session_maker() as db:
             for i, (file_path, base_path, media_type) in enumerate(all_files):
-                if await scan_state_manager.is_cancel_requested():
+                if await scan_state_manager.is_cancel_requested(user_id):
                     break
 
                 await scan_state_manager.update_status(
+                    user_id,
                     files_scanned=i + 1,
                     current_file=os.path.basename(file_path),
                 )
 
-                await scanner.process_file(file_path, base_path, media_type, user_id, db)
+                await scanner.process_file(
+                    file_path, base_path, media_type, user_id, db
+                )
 
                 # Commit periodically
                 if (i + 1) % 50 == 0:
@@ -384,15 +409,18 @@ async def run_scan(
                 scan_loc = result.scalar_one_or_none()
                 if scan_loc:
                     scan_loc.last_scanned = datetime.now(timezone.utc)
-                    file_count = await db.scalar(
-                        select(func.count(MediaFile.id)).where(
-                            MediaFile.file_path.like(f"{location}%"),
-                            MediaFile.user_id == user_id,
+                    file_count = (
+                        await db.scalar(
+                            select(func.count(MediaFile.id)).where(
+                                MediaFile.file_path.like(f"{location}%"),
+                                MediaFile.user_id == user_id,
+                            )
                         )
-                    ) or 0
+                        or 0
+                    )
                     scan_loc.file_count = file_count
 
             await db.commit()
 
     finally:
-        await scan_state_manager.finish_scan()
+        await scan_state_manager.finish_scan(user_id)
