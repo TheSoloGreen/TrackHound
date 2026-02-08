@@ -8,6 +8,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.media import get_dashboard_stats
+from app.core.encryption import encrypt_value
 from app.models.entities import Base, MediaFile, ScanLocation, Show, User
 
 
@@ -29,15 +30,24 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
     async def _test():
         engine, session = await _build_session()
         try:
+            owner = User(
+                plex_user_id="u1",
+                plex_username="tester",
+                plex_token=encrypt_value("token"),
+            )
+            session.add(owner)
+            await session.flush()
+
             shows = [
-                Show(title="Movie A", media_type="movie", is_anime=False),
-                Show(title="TV A", media_type="tv", is_anime=False),
-                Show(title="Anime A", media_type="anime", is_anime=True),
+                Show(user_id=owner.id, title="Movie A", media_type="movie", is_anime=False),
+                Show(user_id=owner.id, title="TV A", media_type="tv", is_anime=False),
+                Show(user_id=owner.id, title="Anime A", media_type="anime", is_anime=True),
             ]
             session.add_all(shows)
 
             media_files = [
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a1.mkv",
                     filename="a1.mkv",
                     file_size=10,
@@ -47,6 +57,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
                     issue_details="Missing English audio track",
                 ),
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a2.mkv",
                     filename="a2.mkv",
                     file_size=11,
@@ -56,6 +67,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
                     issue_details="Missing Japanese audio track (anime)",
                 ),
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a3.mkv",
                     filename="a3.mkv",
                     file_size=12,
@@ -65,6 +77,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
                     issue_details="Missing English audio for dual audio (anime)",
                 ),
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a4.mkv",
                     filename="a4.mkv",
                     file_size=13,
@@ -74,6 +87,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
                     issue_details="Missing Japanese audio for dual audio (anime)",
                 ),
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a5.mkv",
                     filename="a5.mkv",
                     file_size=14,
@@ -83,6 +97,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
                     issue_details="Missing dual audio (English + Japanese) for anime",
                 ),
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/a6.mkv",
                     filename="a6.mkv",
                     file_size=15,
@@ -97,12 +112,14 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
             session.add_all(
                 [
                     ScanLocation(
+                        user_id=owner.id,
                         path="/media/a",
                         label="A",
                         media_type="tv",
                         last_scanned=datetime(2024, 2, 1, tzinfo=timezone.utc),
                     ),
                     ScanLocation(
+                        user_id=owner.id,
                         path="/media/b",
                         label="B",
                         media_type="anime",
@@ -112,13 +129,7 @@ def test_dashboard_stats_issue_counters_and_last_scan_from_locations():
             )
             await session.commit()
 
-            current_user = User(
-                id=1,
-                plex_user_id="u1",
-                plex_username="tester",
-                plex_token="token",
-            )
-            stats = await get_dashboard_stats(current_user=current_user, db=session)
+            stats = await get_dashboard_stats(current_user=owner, db=session)
 
             assert stats.total_titles == 3
             assert stats.total_files == 6
@@ -141,8 +152,17 @@ def test_dashboard_stats_last_scan_falls_back_to_media_files():
     async def _test():
         engine, session = await _build_session()
         try:
+            owner = User(
+                plex_user_id="u2",
+                plex_username="tester2",
+                plex_token=encrypt_value("token"),
+            )
+            session.add(owner)
+            await session.flush()
+
             session.add(
                 MediaFile(
+                    user_id=owner.id,
                     file_path="/tmp/b1.mkv",
                     filename="b1.mkv",
                     file_size=20,
@@ -154,13 +174,7 @@ def test_dashboard_stats_last_scan_falls_back_to_media_files():
             )
             await session.commit()
 
-            current_user = User(
-                id=2,
-                plex_user_id="u2",
-                plex_username="tester2",
-                plex_token="token",
-            )
-            stats = await get_dashboard_stats(current_user=current_user, db=session)
+            stats = await get_dashboard_stats(current_user=owner, db=session)
 
             assert stats.last_scan == datetime(2024, 3, 10)
             assert stats.total_files == 1
