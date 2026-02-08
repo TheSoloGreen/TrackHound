@@ -30,6 +30,30 @@ router = APIRouter()
 MEDIA_ROOT = "/media"
 
 
+def _invalid_scan_input(message: str) -> HTTPException:
+    """Build a consistent 400 validation response for scan endpoints."""
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail={
+            "detail": "Invalid request input.",
+            "errors": [message],
+        },
+    )
+
+
+def _validate_scan_media_type(value: ScanMediaType | str) -> str:
+    """Normalize media_type values to tv/movie/anime."""
+    if isinstance(value, ScanMediaType):
+        return value.value
+
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {item.value for item in ScanMediaType}:
+            return normalized
+
+    raise _invalid_scan_input("media_type must be one of: tv, movie, anime.")
+
+
 # ============== Directory Browsing ==============
 
 
