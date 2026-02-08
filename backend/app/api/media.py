@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.auth import get_current_user
 from app.models.database import get_db
-from app.models.entities import User, Show, Season, MediaFile, AudioTrack
+from app.models.entities import User, Show, Season, MediaFile, AudioTrack, ScanLocation
 from app.models.schemas import (
     AudioTrackResponse,
     ShowResponse,
@@ -25,6 +25,35 @@ from app.models.schemas import (
 )
 
 router = APIRouter()
+
+
+def _build_issue_predicate(*patterns: str):
+    """Build a SQL predicate that matches any known issue representation."""
+    return or_(*[MediaFile.issue_details.ilike(pattern) for pattern in patterns])
+
+
+def _media_user_scope_filters(current_user: User) -> list:
+    """Return media filters scoped to the current user when ownership fields exist."""
+    filters = []
+    if hasattr(MediaFile, "user_id"):
+        filters.append(MediaFile.user_id == current_user.id)
+    return filters
+
+
+def _show_user_scope_filters(current_user: User) -> list:
+    """Return show filters scoped to the current user when ownership fields exist."""
+    filters = []
+    if hasattr(Show, "user_id"):
+        filters.append(Show.user_id == current_user.id)
+    return filters
+
+
+def _scan_location_user_scope_filters(current_user: User) -> list:
+    """Return scan-location filters scoped to the current user when ownership fields exist."""
+    filters = []
+    if hasattr(ScanLocation, "user_id"):
+        filters.append(ScanLocation.user_id == current_user.id)
+    return filters
 
 
 def _build_audio_track_responses(audio_tracks: list) -> list[AudioTrackResponse]:
@@ -74,29 +103,62 @@ async def get_dashboard_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Get dashboard statistics."""
-    total_titles = await db.scalar(
-        select(func.count(Show.id)).where(Show.user_id == current_user.id)
-    ) or 0
+    show_scope_filters = _show_user_scope_filters(current_user)
+    media_scope_filters = _media_user_scope_filters(current_user)
+    scan_scope_filters = _scan_location_user_scope_filters(current_user)
+
+    total_titles = await db.scalar(select(func.count(Show.id)).where(*show_scope_filters)) or 0
 
     movie_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "movie", Show.user_id == current_user.id)
+        select(func.count(Show.id)).where(*show_scope_filters, Show.media_type == "movie")
     ) or 0
     tv_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "tv", Show.user_id == current_user.id)
+        select(func.count(Show.id)).where(*show_scope_filters, Show.media_type == "tv")
     ) or 0
     anime_count = await db.scalar(
-        select(func.count(Show.id)).where(Show.media_type == "anime", Show.user_id == current_user.id)
+        select(func.count(Show.id)).where(*show_scope_filters, Show.media_type == "anime")
     ) or 0
 
-    total_files = await db.scalar(
-        select(func.count(MediaFile.id)).where(MediaFile.user_id == current_user.id)
-    ) or 0
+    total_files = await db.scalar(select(func.count(MediaFile.id)).where(*media_scope_filters)) or 0
 
     files_with_issues = await db.scalar(
-        select(func.count(MediaFile.id)).where(
-            MediaFile.has_issues == True, MediaFile.user_id == current_user.id
-        )
+        select(func.count(MediaFile.id)).where(*media_scope_filters, MediaFile.has_issues == True)
     ) or 0
+
+    missing_english_predicate = _build_issue_predicate(
+        "%Missing English audio track%",
+        "%Missing English audio for dual audio (anime)%",
+        "%missing_english%",
+    )
+    missing_japanese_predicate = _build_issue_predicate(
+        "%Missing Japanese audio track (anime)%",
+        "%Missing Japanese audio for dual audio (anime)%",
+        "%missing_japanese%",
+    )
+    missing_dual_audio_predicate = _build_issue_predicate(
+        "%Missing dual audio (English + Japanese) for anime%",
+        "%Missing English audio for dual audio (anime)%",
+        "%Missing Japanese audio for dual audio (anime)%",
+        "%missing_dual_audio%",
+    )
+
+    missing_english_count = await db.scalar(
+        select(func.count(MediaFile.id)).where(*media_scope_filters, missing_english_predicate)
+    ) or 0
+    missing_japanese_count = await db.scalar(
+        select(func.count(MediaFile.id)).where(*media_scope_filters, missing_japanese_predicate)
+    ) or 0
+    missing_dual_audio_count = await db.scalar(
+        select(func.count(MediaFile.id)).where(*media_scope_filters, missing_dual_audio_predicate)
+    ) or 0
+
+    last_scan = await db.scalar(
+        select(func.max(ScanLocation.last_scanned)).where(*scan_scope_filters)
+    )
+    if last_scan is None:
+        last_scan = await db.scalar(
+            select(func.max(MediaFile.last_scanned)).where(*media_scope_filters)
+        )
 
     return DashboardStats(
         total_titles=total_titles,
@@ -105,10 +167,10 @@ async def get_dashboard_stats(
         movie_count=movie_count,
         tv_count=tv_count,
         anime_count=anime_count,
-        missing_english_count=0,
-        missing_japanese_count=0,
-        missing_dual_audio_count=0,
-        last_scan=None,
+        missing_english_count=missing_english_count,
+        missing_japanese_count=missing_japanese_count,
+        missing_dual_audio_count=missing_dual_audio_count,
+        last_scan=last_scan,
     )
 
 
