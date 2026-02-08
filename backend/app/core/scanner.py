@@ -365,7 +365,7 @@ async def run_scan(
                     current_file=os.path.basename(file_path),
                 )
 
-                await scanner.process_file(file_path, base_path, media_type, db)
+                await scanner.process_file(file_path, base_path, media_type, user_id, db)
 
                 # Commit periodically
                 if (i + 1) % 50 == 0:
