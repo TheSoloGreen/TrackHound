@@ -45,7 +45,7 @@ cp .env.example .env
 # Build and run with Docker Compose
 docker-compose up -d
 
-# Access at http://localhost:8080
+# Access at http://localhost:8383
 ```
 
 ### Development Setup
@@ -113,7 +113,7 @@ DATABASE_URL=postgresql+asyncpg://user:password@host:5432/dbname
      - /mnt/user/Media/TV:/media/tv:ro
      - /mnt/user/Media/Anime:/media/anime:ro
    ```
-3. Set a secure `SECRET_KEY`
+3. Set secure `SECRET_KEY` and `ENCRYPTION_KEY` values
 4. Access via `http://your-server:8080`
 
 ## API Documentation

@@ -17,6 +17,7 @@ services:
       # - /mnt/remotes/yggdrasil/media/TV Shows:/media/yggdrasil/tv:ro
     environment:
       - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env}
       - DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8383}
       - ENVIRONMENT=production

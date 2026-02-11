@@ -32,9 +32,9 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # Database - supports both SQLite and PostgreSQL
-    # SQLite: sqlite+aiosqlite:///./data/cineaudit.db
+    # SQLite: sqlite+aiosqlite:///./data/trackhound.db
     # PostgreSQL: postgresql+asyncpg://user:pass@host:5432/dbname
-    database_url: str = "sqlite+aiosqlite:///./data/cineaudit.db"
+    database_url: str = "sqlite+aiosqlite:///./data/trackhound.db"
 
     # Security
     secret_key: str = _INSECURE_DEFAULT_KEY
