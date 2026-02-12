@@ -1,6 +1,6 @@
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, AlertTriangle, RefreshCw } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import type { ShowDetail, SeasonDetail, MediaFile, MediaType } from '../types'
 import { useState } from 'react'
@@ -20,7 +20,17 @@ const MEDIA_TYPE_BADGE: Record<MediaType, { label: string; classes: string }> = 
   },
 }
 
-function FileRow({ file, showEpisodeNumber }: { file: MediaFile; showEpisodeNumber: boolean }) {
+function FileRow({
+  file,
+  showEpisodeNumber,
+  onRescan,
+  isRescanning,
+}: {
+  file: MediaFile
+  showEpisodeNumber: boolean
+  onRescan: (fileId: number) => void
+  isRescanning: boolean
+}) {
   return (
     <div
       className={`p-3 rounded-lg border ${
@@ -40,7 +50,15 @@ function FileRow({ file, showEpisodeNumber }: { file: MediaFile; showEpisodeNumb
             </p>
           )}
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={() => onRescan(file.id)}
+            disabled={isRescanning}
+            className="inline-flex items-center gap-1.5 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin' : ''}`} />
+            Rescan
+          </button>
           {file.audio_tracks.map((track) => (
             <span
               key={track.id}
@@ -65,7 +83,9 @@ function FileRow({ file, showEpisodeNumber }: { file: MediaFile; showEpisodeNumb
 export default function ShowDetailPage() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const location = useLocation()
   const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+  const [rescanError, setRescanError] = useState<string | null>(null)
 
   const showId = Number(id)
 
@@ -85,6 +105,19 @@ export default function ShowDetailPage() {
       return response.data
     },
     enabled: !!selectedSeason && !isNaN(showId) && show?.media_type !== 'movie',
+  })
+
+  const rescanFileMutation = useMutation({
+    mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
+    onSuccess: () => {
+      setRescanError(null)
+      queryClient.invalidateQueries({ queryKey: ['show', id] })
+      queryClient.invalidateQueries({ queryKey: ['season', id, selectedSeason] })
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => {
+      setRescanError('Failed to rescan file. Please confirm the file still exists and try again.')
+    },
   })
 
   const toggleAnimeMutation = useMutation({
@@ -107,7 +140,7 @@ export default function ShowDetailPage() {
     return (
       <div className="text-center py-12">
         <p className="text-gray-500">Title not found</p>
-        <Link to="/library" className="text-orange-500 hover:underline mt-2 inline-block">
+        <Link to={`/library${location.search}`} className="text-orange-500 hover:underline mt-2 inline-block">
           Back to library
         </Link>
       </div>
@@ -130,7 +163,7 @@ export default function ShowDetailPage() {
       {/* Header */}
       <div className="flex items-start gap-4">
         <Link
-          to="/library"
+          to={`/library${location.search}`}
           className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
         >
           <ArrowLeft className="w-5 h-5 text-gray-500" />
@@ -169,6 +202,12 @@ export default function ShowDetailPage() {
         )}
       </div>
 
+      {rescanError && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">{rescanError}</p>
+        </div>
+      )}
+
       {/* Content — Movies: flat file list, TV/Anime: season layout */}
       {isMovie ? (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
@@ -176,7 +215,13 @@ export default function ShowDetailPage() {
           {show.media_files && show.media_files.length > 0 ? (
             <div className="space-y-3 max-h-[600px] overflow-y-auto">
               {show.media_files.map((file) => (
-                <FileRow key={file.id} file={file} showEpisodeNumber={false} />
+                <FileRow
+                  key={file.id}
+                  file={file}
+                  showEpisodeNumber={false}
+                  onRescan={(fileId) => rescanFileMutation.mutate(fileId)}
+                  isRescanning={rescanFileMutation.isPending && rescanFileMutation.variables === file.id}
+                />
               ))}
             </div>
           ) : (
@@ -235,7 +280,13 @@ export default function ShowDetailPage() {
             ) : seasonDetail ? (
               <div className="space-y-3 max-h-[500px] overflow-y-auto">
                 {seasonDetail.media_files.map((file) => (
-                  <FileRow key={file.id} file={file} showEpisodeNumber={true} />
+                  <FileRow
+                    key={file.id}
+                    file={file}
+                    showEpisodeNumber={true}
+                    onRescan={(fileId) => rescanFileMutation.mutate(fileId)}
+                    isRescanning={rescanFileMutation.isPending && rescanFileMutation.variables === file.id}
+                  />
                 ))}
               </div>
             ) : (

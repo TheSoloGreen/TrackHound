@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download } from 'lucide-react'
+import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import type { MediaFile, PaginatedResponse } from '../types'
@@ -41,6 +41,18 @@ export default function FilesPage() {
     },
     onError: () => {
       setActionError('Failed to update default audio track. Ensure this is an MKV file and the language exists.')
+    },
+  })
+
+
+  const rescanFile = useMutation({
+    mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
+    onSuccess: () => {
+      setActionError(null)
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => {
+      setActionError('Failed to rescan file. Please confirm the file still exists and try again.')
     },
   })
 
@@ -204,6 +216,17 @@ export default function FilesPage() {
                             </div>
                           )}
                           <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                rescanFile.mutate(file.id)
+                              }}
+                              disabled={rescanFile.isPending}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${rescanFile.isPending && rescanFile.variables === file.id ? 'animate-spin' : ''}`} />
+                              Rescan File
+                            </button>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Set default audio:</span>
                             {[...new Set(file.audio_tracks.map((track) => (track.language || '').toLowerCase()).filter(Boolean))].map((lang) => (
                               <button

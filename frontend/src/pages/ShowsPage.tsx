@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Search, AlertTriangle, ChevronRight } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
@@ -30,12 +30,30 @@ function mediaTypeSummary(show: Show): string {
 }
 
 export default function ShowsPage() {
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
-  const [filters, setFilters] = useState({
-    media_type: undefined as string | undefined,
-    has_issues: undefined as boolean | undefined,
-  })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+
+  const page = Math.max(1, Number(searchParams.get('page') || '1'))
+  const search = searchParams.get('search') || ''
+  const hasIssuesParam = searchParams.get('has_issues')
+  const mediaTypeParam = searchParams.get('media_type')
+
+  const filters = useMemo(() => ({
+    media_type: mediaTypeParam || undefined,
+    has_issues: hasIssuesParam === null ? undefined : hasIssuesParam === 'true',
+  }), [hasIssuesParam, mediaTypeParam])
+
+  const updateSearchParams = (updates: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(searchParams)
+    for (const [key, value] of Object.entries(updates)) {
+      if (!value) {
+        next.delete(key)
+      } else {
+        next.set(key, value)
+      }
+    }
+    setSearchParams(next)
+  }
 
   const debouncedSearch = useDebounce(search, 300)
 
@@ -72,8 +90,10 @@ export default function ShowsPage() {
             placeholder="Search library..."
             value={search}
             onChange={(e) => {
-              setSearch(e.target.value)
-              setPage(1)
+              updateSearchParams({
+                search: e.target.value || undefined,
+                page: undefined,
+              })
             }}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
           />
@@ -82,11 +102,10 @@ export default function ShowsPage() {
           <select
             value={filters.media_type || ''}
             onChange={(e) => {
-              setFilters({
-                ...filters,
+              updateSearchParams({
                 media_type: e.target.value || undefined,
+                page: undefined,
               })
-              setPage(1)
             }}
             className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
           >
@@ -98,11 +117,10 @@ export default function ShowsPage() {
           <select
             value={filters.has_issues === undefined ? '' : filters.has_issues.toString()}
             onChange={(e) => {
-              setFilters({
-                ...filters,
-                has_issues: e.target.value === '' ? undefined : e.target.value === 'true',
+              updateSearchParams({
+                has_issues: e.target.value === '' ? undefined : e.target.value,
+                page: undefined,
               })
-              setPage(1)
             }}
             className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
           >
@@ -133,7 +151,7 @@ export default function ShowsPage() {
               return (
                 <Link
                   key={show.id}
-                  to={`/library/${show.id}`}
+                  to={`/library/${show.id}${location.search}`}
                   className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                 >
                   {show.thumb_url ? (
@@ -185,7 +203,7 @@ export default function ShowsPage() {
       {data && data.pages > 1 && (
         <div className="flex items-center justify-center gap-2">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            onClick={() => updateSearchParams({ page: String(Math.max(1, page - 1)) })}
             disabled={page === 1}
             className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 disabled:opacity-50"
           >
@@ -195,7 +213,7 @@ export default function ShowsPage() {
             Page {page} of {data.pages}
           </span>
           <button
-            onClick={() => setPage((p) => Math.min(data.pages, p + 1))}
+            onClick={() => updateSearchParams({ page: String(Math.min(data.pages, page + 1)) })}
             disabled={page === data.pages}
             className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 disabled:opacity-50"
           >
