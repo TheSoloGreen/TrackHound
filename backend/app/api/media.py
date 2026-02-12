@@ -1,5 +1,6 @@
 """Media API endpoints for querying shows, seasons, and files."""
 
+from datetime import datetime, timezone
 from math import ceil
 from typing import Annotated, Optional
 
@@ -143,6 +144,46 @@ async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioP
         auto_fix_english_default_non_anime=parsed.auto_fix_english_default_non_anime,
     )
 
+
+
+
+async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_user: User) -> None:
+    """Re-analyze one media file and refresh audio track + issue metadata."""
+    analyzer = AudioAnalyzer()
+    refreshed_audio = analyzer.analyze(mf.file_path)
+    refreshed_tracks = refreshed_audio.get("audio_tracks", [])
+
+    await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == mf.id))
+    for track_info in refreshed_tracks:
+        db.add(
+            AudioTrack(
+                media_file_id=mf.id,
+                track_index=track_info.get("index", 0),
+                language=track_info.get("language"),
+                language_raw=track_info.get("language_raw"),
+                codec=track_info.get("codec"),
+                channels=track_info.get("channels"),
+                channel_layout=track_info.get("channel_layout"),
+                bitrate=track_info.get("bitrate"),
+                is_default=track_info.get("is_default", False),
+                is_forced=track_info.get("is_forced", False),
+                title=track_info.get("title"),
+            )
+        )
+
+    mf.container_format = refreshed_audio.get("container")
+    mf.duration_ms = refreshed_audio.get("duration_ms")
+    mf.last_scanned = datetime.now(timezone.utc)
+
+    audio_preferences = await _load_user_audio_preferences(db, current_user.id)
+    preference_engine = PreferenceEngine(audio_preferences)
+    is_anime = bool(mf.show and mf.show.is_anime)
+    issues = preference_engine.evaluate(refreshed_tracks, is_anime=is_anime)
+    mf.has_issues = len(issues) > 0
+    mf.issue_details = "; ".join(issues) if issues else None
+
+    await db.flush()
+    await db.refresh(mf, attribute_names=["audio_tracks", "show"])
 
 # ============== Dashboard Stats ==============
 
@@ -687,42 +728,34 @@ async def update_media_file_default_audio(
             detail="Unable to set default audio track. Ensure the file is MKV, mkvpropedit is installed, and the language exists.",
         )
 
-    analyzer = AudioAnalyzer()
-    refreshed_audio = analyzer.analyze(mf.file_path)
-    refreshed_tracks = refreshed_audio.get("audio_tracks", [])
-
-    await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == mf.id))
-    for track_info in refreshed_tracks:
-        db.add(
-            AudioTrack(
-                media_file_id=mf.id,
-                track_index=track_info.get("index", 0),
-                language=track_info.get("language"),
-                language_raw=track_info.get("language_raw"),
-                codec=track_info.get("codec"),
-                channels=track_info.get("channels"),
-                channel_layout=track_info.get("channel_layout"),
-                bitrate=track_info.get("bitrate"),
-                is_default=track_info.get("is_default", False),
-                is_forced=track_info.get("is_forced", False),
-                title=track_info.get("title"),
-            )
-        )
-
-    mf.container_format = refreshed_audio.get("container")
-    mf.duration_ms = refreshed_audio.get("duration_ms")
-
-    audio_preferences = await _load_user_audio_preferences(db, current_user.id)
-    preference_engine = PreferenceEngine(audio_preferences)
-    is_anime = bool(mf.show and mf.show.is_anime)
-    issues = preference_engine.evaluate(refreshed_tracks, is_anime=is_anime)
-    mf.has_issues = len(issues) > 0
-    mf.issue_details = "; ".join(issues) if issues else None
-
-    await db.flush()
-    await db.refresh(mf, attribute_names=["audio_tracks", "show"])
+    await _refresh_media_file_analysis(db, mf, current_user)
 
     return UpdateDefaultAudioResponse(
         message=f"Default audio updated to '{target_language}'.",
+        media_file=_build_media_file_response(mf),
+    )
+
+
+@router.post("/files/{file_id}/rescan", response_model=UpdateDefaultAudioResponse)
+async def rescan_media_file(
+    file_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Re-analyze a single media file and refresh its stored metadata."""
+    result = await db.execute(
+        select(MediaFile)
+        .options(selectinload(MediaFile.audio_tracks), selectinload(MediaFile.show))
+        .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
+    )
+    mf = result.scalar_one_or_none()
+
+    if not mf:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
+
+    await _refresh_media_file_analysis(db, mf, current_user)
+
+    return UpdateDefaultAudioResponse(
+        message="File rescan complete.",
         media_file=_build_media_file_response(mf),
     )
