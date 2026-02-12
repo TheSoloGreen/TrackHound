@@ -201,7 +201,6 @@ export default function SettingsPage() {
       path,
       label: prev.label || name.charAt(0).toUpperCase() + name.slice(1),
     }))
-    setShowPicker(false)
   }
 
   if (settingsLoading || locationsLoading) {
