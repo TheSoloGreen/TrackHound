@@ -137,6 +137,15 @@ export interface DashboardStats {
   missing_english_count: number
   missing_japanese_count: number
   missing_dual_audio_count: number
+  missing_english_movies_count: number
+  missing_english_tv_count: number
+  missing_english_anime_count: number
+  missing_japanese_movies_count: number
+  missing_japanese_tv_count: number
+  missing_japanese_anime_count: number
+  missing_dual_audio_movies_count: number
+  missing_dual_audio_tv_count: number
+  missing_dual_audio_anime_count: number
   last_scan: string | null
 }
 

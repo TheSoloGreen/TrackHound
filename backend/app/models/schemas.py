@@ -334,4 +334,13 @@ class DashboardStats(BaseModel):
     missing_english_count: int
     missing_japanese_count: int
     missing_dual_audio_count: int
+    missing_english_movies_count: int
+    missing_english_tv_count: int
+    missing_english_anime_count: int
+    missing_japanese_movies_count: int
+    missing_japanese_tv_count: int
+    missing_japanese_anime_count: int
+    missing_dual_audio_movies_count: int
+    missing_dual_audio_tv_count: int
+    missing_dual_audio_anime_count: int
     last_scan: Optional[datetime] = None

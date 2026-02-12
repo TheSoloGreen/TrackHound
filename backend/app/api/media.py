@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from math import ceil
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -26,6 +26,7 @@ from app.models.schemas import (
     UpdateDefaultAudioRequest,
     UpdateDefaultAudioResponse,
 )
+from app.services.exporter import Exporter
 
 router = APIRouter()
 
@@ -38,6 +39,35 @@ from app.models.schemas import AudioPreferences as AudioPreferencesSchema
 def _build_issue_predicate(*patterns: str):
     """Build a SQL predicate that matches any known issue representation."""
     return or_(*[MediaFile.issue_details.ilike(pattern) for pattern in patterns])
+
+
+def _build_media_file_filters(
+    current_user: User,
+    has_issues: Optional[bool] = None,
+    show_id: Optional[int] = None,
+    search: Optional[str] = None,
+) -> list:
+    """Build shared media-file filters for list/export endpoints."""
+    filters = [MediaFile.user_id == current_user.id]
+
+    if has_issues is not None:
+        filters.append(MediaFile.has_issues == has_issues)
+    if show_id is not None:
+        filters.append(
+            or_(
+                MediaFile.season_id.in_(
+                    select(Season.id).where(
+                        Season.show_id == show_id,
+                        Season.show.has(Show.user_id == current_user.id),
+                    )
+                ),
+                MediaFile.show_id == show_id,
+            )
+        )
+    if search:
+        filters.append(MediaFile.filename.ilike(f"%{search}%"))
+
+    return filters
 
 
 def _media_user_scope_filters(current_user: User) -> list:
@@ -233,6 +263,21 @@ async def get_dashboard_stats(
         "%missing_dual_audio%",
     )
 
+    async def _count_by_issue_and_media_type(issue_predicate, media_type: str) -> int:
+        return (
+            await db.scalar(
+                select(func.count(MediaFile.id))
+                .join(Show, Show.id == MediaFile.show_id)
+                .where(
+                    MediaFile.user_id == current_user.id,
+                    Show.user_id == current_user.id,
+                    Show.media_type == media_type,
+                    issue_predicate,
+                )
+            )
+            or 0
+        )
+
     missing_english_count = await db.scalar(
         select(func.count(MediaFile.id)).where(*media_scope_filters, missing_english_predicate)
     ) or 0
@@ -242,6 +287,18 @@ async def get_dashboard_stats(
     missing_dual_audio_count = await db.scalar(
         select(func.count(MediaFile.id)).where(*media_scope_filters, missing_dual_audio_predicate)
     ) or 0
+
+    missing_english_movies_count = await _count_by_issue_and_media_type(missing_english_predicate, "movie")
+    missing_english_tv_count = await _count_by_issue_and_media_type(missing_english_predicate, "tv")
+    missing_english_anime_count = await _count_by_issue_and_media_type(missing_english_predicate, "anime")
+
+    missing_japanese_movies_count = await _count_by_issue_and_media_type(missing_japanese_predicate, "movie")
+    missing_japanese_tv_count = await _count_by_issue_and_media_type(missing_japanese_predicate, "tv")
+    missing_japanese_anime_count = await _count_by_issue_and_media_type(missing_japanese_predicate, "anime")
+
+    missing_dual_audio_movies_count = await _count_by_issue_and_media_type(missing_dual_audio_predicate, "movie")
+    missing_dual_audio_tv_count = await _count_by_issue_and_media_type(missing_dual_audio_predicate, "tv")
+    missing_dual_audio_anime_count = await _count_by_issue_and_media_type(missing_dual_audio_predicate, "anime")
 
     last_scan = await db.scalar(
         select(func.max(ScanLocation.last_scanned)).where(*scan_scope_filters)
@@ -261,6 +318,15 @@ async def get_dashboard_stats(
         missing_english_count=missing_english_count,
         missing_japanese_count=missing_japanese_count,
         missing_dual_audio_count=missing_dual_audio_count,
+        missing_english_movies_count=missing_english_movies_count,
+        missing_english_tv_count=missing_english_tv_count,
+        missing_english_anime_count=missing_english_anime_count,
+        missing_japanese_movies_count=missing_japanese_movies_count,
+        missing_japanese_tv_count=missing_japanese_tv_count,
+        missing_japanese_anime_count=missing_japanese_anime_count,
+        missing_dual_audio_movies_count=missing_dual_audio_movies_count,
+        missing_dual_audio_tv_count=missing_dual_audio_tv_count,
+        missing_dual_audio_anime_count=missing_dual_audio_anime_count,
         last_scan=last_scan,
     )
 
@@ -631,31 +697,14 @@ async def list_media_files(
     search: Optional[str] = None,
 ):
     """List media files with pagination and filters."""
-    query = select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(
-        MediaFile.user_id == current_user.id
+    filters = _build_media_file_filters(
+        current_user=current_user,
+        has_issues=has_issues,
+        show_id=show_id,
+        search=search,
     )
 
-    filters = []
-    if has_issues is not None:
-        filters.append(MediaFile.has_issues == has_issues)
-    if show_id is not None:
-        # Match files linked via season OR directly via show_id
-        filters.append(
-            or_(
-                MediaFile.season_id.in_(
-                    select(Season.id).where(
-                        Season.show_id == show_id,
-                        Season.show.has(Show.user_id == current_user.id),
-                    )
-                ),
-                MediaFile.show_id == show_id,
-            )
-        )
-    if search:
-        filters.append(MediaFile.filename.ilike(f"%{search}%"))
-
-    if filters:
-        query = query.where(and_(*filters))
+    query = select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(*filters)
 
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
@@ -759,3 +808,75 @@ async def rescan_media_file(
         message="File rescan complete.",
         media_file=_build_media_file_response(mf),
     )
+
+
+@router.get("/files-export")
+async def export_media_files(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    has_issues: Optional[bool] = None,
+    show_id: Optional[int] = None,
+    search: Optional[str] = None,
+):
+    """Export filtered media files in CSV or JSON format."""
+    filters = _build_media_file_filters(
+        current_user=current_user,
+        has_issues=has_issues,
+        show_id=show_id,
+        search=search,
+    )
+
+    result = await db.execute(
+        select(MediaFile)
+        .options(selectinload(MediaFile.audio_tracks))
+        .where(*filters)
+        .order_by(MediaFile.file_path)
+    )
+    files = result.scalars().all()
+
+    if format == "json":
+        payload = Exporter.export_media_files_json(files)
+        media_type = "application/json"
+        filename = "trackhound-files-export.json"
+    else:
+        payload = Exporter.export_media_files_csv(files)
+        media_type = "text/csv"
+        filename = "trackhound-files-export.csv"
+
+    return Response(
+        content=payload,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/files", status_code=status.HTTP_200_OK)
+async def reset_media_library(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Reset scanned library data for the current user."""
+    media_deleted = (
+        await db.execute(delete(MediaFile).where(MediaFile.user_id == current_user.id))
+    ).rowcount or 0
+
+    await db.execute(
+        delete(Season).where(Season.show_id.in_(select(Show.id).where(Show.user_id == current_user.id)))
+    )
+    shows_deleted = (
+        await db.execute(delete(Show).where(Show.user_id == current_user.id))
+    ).rowcount or 0
+
+    scan_locations = (
+        await db.execute(select(ScanLocation).where(ScanLocation.user_id == current_user.id))
+    ).scalars().all()
+    for location in scan_locations:
+        location.file_count = 0
+        location.last_scanned = None
+
+    return {
+        "message": "Scanned library data reset.",
+        "deleted_files": media_deleted,
+        "deleted_shows": shows_deleted,
+    }

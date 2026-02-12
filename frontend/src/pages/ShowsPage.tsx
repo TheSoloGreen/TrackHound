@@ -201,7 +201,7 @@ export default function ShowsPage() {
 
       {/* Pagination */}
       {data && data.pages > 1 && (
-        <div className="flex items-center justify-center gap-2">
+        <div className="flex items-center justify-center gap-2 flex-wrap">
           <button
             onClick={() => updateSearchParams({ page: String(Math.max(1, page - 1)) })}
             disabled={page === 1}
@@ -212,6 +212,20 @@ export default function ShowsPage() {
           <span className="text-sm text-gray-600 dark:text-gray-400">
             Page {page} of {data.pages}
           </span>
+          <label className="text-sm text-gray-600 dark:text-gray-400">Jump to</label>
+          <input
+            type="number"
+            min={1}
+            max={data.pages}
+            value={page}
+            onChange={(e) => {
+              const value = Number(e.target.value)
+              if (!Number.isNaN(value)) {
+                updateSearchParams({ page: String(Math.min(data.pages, Math.max(1, value))) })
+              }
+            }}
+            className="w-16 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          />
           <button
             onClick={() => updateSearchParams({ page: String(Math.min(data.pages, page + 1)) })}
             disabled={page === data.pages}

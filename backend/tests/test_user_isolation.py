@@ -1,6 +1,9 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 from fastapi import FastAPI
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 from app.api.auth import get_current_user
@@ -8,7 +11,7 @@ from app.api.media import router as media_router
 from app.api.scan import router as scan_router
 from app.core.scan_state import scan_state_manager
 from app.models.database import get_db
-from app.models.entities import Base, User, Show, ScanLocation
+from app.models.entities import Base, User, Show, ScanLocation, MediaFile
 
 
 @pytest.fixture
@@ -60,6 +63,7 @@ async def test_app():
         users["b"] = user_b
         users["show_b_id"] = show_b.id
         users["scan_b_id"] = scan_b.id
+        users["session_maker"] = session_maker
 
     app.dependency_overrides[get_db] = override_db
 
@@ -278,3 +282,69 @@ async def test_user_cannot_cancel_another_users_scan(test_app):
 
         cancel_a_resp = await client.post("/api/scan/cancel")
         assert cancel_a_resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_export_and_reset_files_are_scoped_to_current_user(test_app):
+    app, users = test_app
+
+    async with users["session_maker"]() as session:
+        show_a = Show(user_id=users["a"].id, title="A Show", media_type="tv", is_anime=False)
+        show_b = Show(user_id=users["b"].id, title="B Show", media_type="tv", is_anime=False)
+        session.add_all([show_a, show_b])
+        await session.flush()
+
+        session.add_all(
+            [
+                MediaFile(
+                    user_id=users["a"].id,
+                    show_id=show_a.id,
+                    file_path="/media/a/file1.mkv",
+                    filename="file1.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=True,
+                    issue_details="Missing English audio track",
+                ),
+                MediaFile(
+                    user_id=users["b"].id,
+                    show_id=show_b.id,
+                    file_path="/media/b/file2.mkv",
+                    filename="file2.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=False,
+                    issue_details=None,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async def current_user_a():
+        return users["a"]
+
+    app.dependency_overrides[get_current_user] = current_user_a
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        export_resp = await client.get("/api/media/files-export?format=csv")
+        assert export_resp.status_code == 200
+        assert "file1.mkv" in export_resp.text
+        assert "file2.mkv" not in export_resp.text
+
+        reset_resp = await client.delete("/api/media/files")
+        assert reset_resp.status_code == 200
+        assert reset_resp.json()["deleted_files"] == 1
+
+    async with users["session_maker"]() as session:
+        user_a_count = await session.scalar(
+            select(func.count(MediaFile.id)).where(MediaFile.user_id == users["a"].id)
+        )
+        user_b_count = await session.scalar(
+            select(func.count(MediaFile.id)).where(MediaFile.user_id == users["b"].id)
+        )
+
+    assert user_a_count == 0
+    assert user_b_count == 1
