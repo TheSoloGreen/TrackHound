@@ -71,10 +71,30 @@ export default function DashboardPage() {
 
   const startScan = useMutation({
     mutationFn: () => scanApi.start({ incremental: true }),
-    onSuccess: () => {
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ['scanStatus'] })
+      const previousStatus = queryClient.getQueryData<ScanStatus>(['scanStatus'])
+
+      queryClient.setQueryData<ScanStatus>(['scanStatus'], {
+        is_running: true,
+        current_location: previousStatus?.current_location ?? null,
+        files_scanned: previousStatus?.files_scanned ?? 0,
+        files_total: previousStatus?.files_total ?? 0,
+        current_file: previousStatus?.current_file ?? 'Starting...',
+        started_at: previousStatus?.started_at ?? null,
+        errors: previousStatus?.errors ?? [],
+      })
+
+      return { previousStatus }
+    },
+    onSuccess: (response) => {
+      queryClient.setQueryData(['scanStatus'], response.data)
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
-    onError: () => {
+    onError: (_error, _variables, context) => {
+      if (context?.previousStatus) {
+        queryClient.setQueryData(['scanStatus'], context.previousStatus)
+      }
       queryClient.invalidateQueries({ queryKey: ['scanStatus'] })
     },
   })
