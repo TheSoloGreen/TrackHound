@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw } from 'lucide-react'
+import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw, Trash2 } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
 import type { MediaFile, PaginatedResponse } from '../types'
@@ -29,6 +29,7 @@ export default function FilesPage() {
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [isResetting, setIsResetting] = useState(false)
   const queryClient = useQueryClient()
   const debouncedSearch = useDebounce(search, 300)
 
@@ -69,6 +70,58 @@ export default function FilesPage() {
     },
   })
 
+
+
+  const handleExport = async (format: 'csv' | 'json' = 'csv') => {
+    try {
+      setActionError(null)
+      const response = await mediaApi.exportFiles({
+        format,
+        has_issues: hasIssues,
+        search: debouncedSearch || undefined,
+      })
+
+      const blob = new Blob([response.data], {
+        type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8',
+      })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+      link.href = url
+      link.download = `trackhound-files-${timestamp}.${format}`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+    } catch {
+      setActionError('Failed to export files. Please try again.')
+    }
+  }
+
+  const handleResetScannedFiles = async () => {
+    const confirmed = window.confirm(
+      'Reset scanned files? This will delete scanned files, shows, and issue history. Scan locations will be kept.'
+    )
+    if (!confirmed) return
+
+    try {
+      setActionError(null)
+      setIsResetting(true)
+      await mediaApi.resetFiles()
+      setExpandedFile(null)
+      setPage(1)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['files'] }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['shows'] }),
+      ])
+    } catch {
+      setActionError('Failed to reset scanned files. Please try again.')
+    } finally {
+      setIsResetting(false)
+    }
+  }
+
   const formatFileSize = (bytes: number) => {
     const gb = bytes / (1024 * 1024 * 1024)
     if (gb >= 1) return `${gb.toFixed(2)} GB`
@@ -86,12 +139,30 @@ export default function FilesPage() {
             Browse all scanned media files
           </p>
         </div>
-        <button
-          className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
-        >
-          <Download className="w-4 h-4" />
-          Export CSV
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => handleExport('csv')}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Export CSV
+          </button>
+          <button
+            onClick={() => handleExport('json')}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            Export JSON
+          </button>
+          <button
+            onClick={handleResetScannedFiles}
+            disabled={isResetting}
+            className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            {isResetting ? 'Resetting...' : 'Reset Scanned Files'}
+          </button>
+        </div>
       </div>
 
       {/* Search and Filters */}
@@ -290,6 +361,20 @@ export default function FilesPage() {
             <span className="text-sm text-gray-600 dark:text-gray-400">
               Page {page} of {data.pages}
             </span>
+            <label className="text-sm text-gray-600 dark:text-gray-400">Jump to</label>
+            <input
+              type="number"
+              min={1}
+              max={data.pages}
+              value={page}
+              onChange={(e) => {
+                const value = Number(e.target.value)
+                if (!Number.isNaN(value)) {
+                  setPage(Math.min(data.pages, Math.max(1, value)))
+                }
+              }}
+              className="w-16 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            />
             <button
               onClick={() => setPage((p) => Math.min(data.pages, p + 1))}
               disabled={page === data.pages}

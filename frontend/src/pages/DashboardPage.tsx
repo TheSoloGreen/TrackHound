@@ -283,27 +283,43 @@ export default function DashboardPage() {
         {/* Audio Issues */}
         <div className="bg-white dark:bg-gray-800 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            Audio Issues Summary
+            Audio Issues Summary by Media Type
           </h2>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600 dark:text-gray-400">Missing English Audio</span>
-              <span className="font-semibold text-red-600 dark:text-red-400">
-                {stats?.missing_english_count || 0}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600 dark:text-gray-400">Missing Japanese Audio (Anime)</span>
-              <span className="font-semibold text-red-600 dark:text-red-400">
-                {stats?.missing_japanese_count || 0}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600 dark:text-gray-400">Missing Dual Audio (Anime)</span>
-              <span className="font-semibold text-orange-600 dark:text-orange-400">
-                {stats?.missing_dual_audio_count || 0}
-              </span>
-            </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                  <th className="py-2 pr-2">Issue</th>
+                  <th className="py-2 px-2">Movies</th>
+                  <th className="py-2 px-2">TV</th>
+                  <th className="py-2 px-2">Anime</th>
+                  <th className="py-2 pl-2 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="text-gray-700 dark:text-gray-300">
+                <tr className="border-b border-gray-100 dark:border-gray-700/60">
+                  <td className="py-2 pr-2">Missing English Audio</td>
+                  <td className="py-2 px-2">{stats?.missing_english_movies_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_english_tv_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_english_anime_count || 0}</td>
+                  <td className="py-2 pl-2 text-right font-semibold text-red-600 dark:text-red-400">{stats?.missing_english_count || 0}</td>
+                </tr>
+                <tr className="border-b border-gray-100 dark:border-gray-700/60">
+                  <td className="py-2 pr-2">Missing Japanese Audio</td>
+                  <td className="py-2 px-2">{stats?.missing_japanese_movies_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_japanese_tv_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_japanese_anime_count || 0}</td>
+                  <td className="py-2 pl-2 text-right font-semibold text-red-600 dark:text-red-400">{stats?.missing_japanese_count || 0}</td>
+                </tr>
+                <tr>
+                  <td className="py-2 pr-2">Missing Dual Audio</td>
+                  <td className="py-2 px-2">{stats?.missing_dual_audio_movies_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_dual_audio_tv_count || 0}</td>
+                  <td className="py-2 px-2">{stats?.missing_dual_audio_anime_count || 0}</td>
+                  <td className="py-2 pl-2 text-right font-semibold text-orange-600 dark:text-orange-400">{stats?.missing_dual_audio_count || 0}</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
