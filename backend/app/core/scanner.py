@@ -11,10 +11,12 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session_maker
-from app.models.entities import MediaFile, Show, Season, ScanLocation
+from app.models.entities import MediaFile, Show, Season, ScanLocation, UserPreference
 from app.core.analyzer import AudioAnalyzer
 from app.core.plex_connector import PlexConnector
-from app.core.preference_engine import PreferenceEngine
+from app.core.preference_engine import PreferenceEngine, AudioPreferences
+from app.core.audio_fixer import set_default_track_by_index
+from app.models.schemas import AudioPreferences as AudioPreferencesSchema
 from app.core.scan_state import scan_state_manager
 
 logger = logging.getLogger(__name__)
@@ -104,11 +106,54 @@ class MediaScanner:
         self,
         extensions: set[str] = None,
         plex_token: Optional[str] = None,
+        audio_preferences: Optional[AudioPreferences] = None,
     ):
         self.extensions = extensions or DEFAULT_EXTENSIONS
         self.analyzer = AudioAnalyzer()
         self.plex_connector = PlexConnector(plex_token) if plex_token else None
-        self.preference_engine = PreferenceEngine()
+        self.preference_engine = PreferenceEngine(audio_preferences)
+
+    def _get_english_default_fix_index(self, audio_tracks: list[dict]) -> Optional[int]:
+        """Return the English track index to promote as default, if needed."""
+        default_track = None
+        english_indices: list[int] = []
+
+        for track in audio_tracks:
+            language = (track.get("language") or "").lower()
+            track_index = track.get("index")
+            if language == "en" and isinstance(track_index, int):
+                english_indices.append(track_index)
+            if track.get("is_default"):
+                default_track = track
+
+        if not english_indices:
+            return None
+
+        default_language = (default_track.get("language") or "").lower() if default_track else None
+        if default_language == "en":
+            return None
+
+        return english_indices[0]
+
+    def _auto_fix_default_track(self, file_path: str, audio_info: dict, is_anime: bool) -> dict:
+        """Try to set the English track as default for non-anime files when enabled."""
+        if not self.preference_engine.preferences.auto_fix_english_default_non_anime:
+            return audio_info
+
+        audio_tracks = audio_info.get("audio_tracks", [])
+        if is_anime or not audio_tracks:
+            return audio_info
+
+        english_index = self._get_english_default_fix_index(audio_tracks)
+        if english_index is None:
+            return audio_info
+
+        if set_default_track_by_index(file_path, audio_tracks, english_index):
+            logger.info("Auto-fixed default audio track to English: %s", file_path)
+            return self.analyzer.analyze(file_path)
+
+        logger.warning("Auto-fix skipped or failed for file: %s", file_path)
+        return audio_info
 
     def discover_files(self, location: str) -> list[str]:
         """Discover all media files in a location."""
@@ -189,6 +234,13 @@ class MediaScanner:
                 anime_source = "folder" if is_anime else None
                 plex_rating_key = None
                 thumb_url = None
+
+            # Automatically fix default audio for non-anime content when possible
+            audio_info = self._auto_fix_default_track(
+                file_path=file_path,
+                audio_info=audio_info,
+                is_anime=is_anime,
+            )
 
             # Find or create show
             show = None
@@ -339,6 +391,33 @@ class MediaScanner:
             return None
 
 
+async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioPreferences:
+    """Load per-user audio preferences with safe defaults."""
+    result = await db.execute(
+        select(UserPreference).where(
+            UserPreference.user_id == user_id,
+            UserPreference.key == "audio_preferences",
+        )
+    )
+    pref = result.scalar_one_or_none()
+    if not pref or not pref.value:
+        return AudioPreferences()
+
+    try:
+        parsed = AudioPreferencesSchema.model_validate_json(pref.value)
+    except Exception:
+        return AudioPreferences()
+
+    return AudioPreferences(
+        require_english_non_anime=parsed.require_english_non_anime,
+        require_japanese_anime=parsed.require_japanese_anime,
+        require_dual_audio_anime=parsed.require_dual_audio_anime,
+        check_default_track=parsed.check_default_track,
+        preferred_codecs=parsed.preferred_codecs,
+        auto_fix_english_default_non_anime=parsed.auto_fix_english_default_non_anime,
+    )
+
+
 async def run_scan(
     locations: list[str],
     location_media_types: dict[str, str],
@@ -378,6 +457,12 @@ async def run_scan(
 
         # Process files
         async with async_session_maker() as db:
+            audio_preferences = await _load_user_audio_preferences(db, user_id)
+            scanner = MediaScanner(
+                plex_token=user_plex_token,
+                audio_preferences=audio_preferences,
+            )
+
             for i, (file_path, base_path, media_type) in enumerate(all_files):
                 if await scan_state_manager.is_cancel_requested(user_id):
                     break

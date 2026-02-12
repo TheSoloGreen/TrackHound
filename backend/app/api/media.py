@@ -4,13 +4,13 @@ from math import ceil
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.auth import get_current_user
 from app.models.database import get_db
-from app.models.entities import User, Show, Season, MediaFile, AudioTrack, ScanLocation
+from app.models.entities import User, Show, Season, MediaFile, AudioTrack, ScanLocation, UserPreference
 from app.models.schemas import (
     AudioTrackResponse,
     ShowResponse,
@@ -22,9 +22,16 @@ from app.models.schemas import (
     MediaFileResponse,
     MediaFileListResponse,
     DashboardStats,
+    UpdateDefaultAudioRequest,
+    UpdateDefaultAudioResponse,
 )
 
 router = APIRouter()
+
+from app.core.analyzer import AudioAnalyzer
+from app.core.preference_engine import PreferenceEngine, AudioPreferences
+from app.core.audio_fixer import set_default_track_by_language
+from app.models.schemas import AudioPreferences as AudioPreferencesSchema
 
 
 def _build_issue_predicate(*patterns: str):
@@ -91,6 +98,49 @@ def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
         has_issues=mf.has_issues,
         issue_details=mf.issue_details,
         audio_tracks=_build_audio_track_responses(mf.audio_tracks),
+    )
+
+
+def _audio_track_to_dict(track: AudioTrack) -> dict:
+    """Convert ORM audio track to scanner-like dict."""
+    return {
+        "index": track.track_index,
+        "language": track.language,
+        "language_raw": track.language_raw,
+        "codec": track.codec,
+        "channels": track.channels,
+        "channel_layout": track.channel_layout,
+        "bitrate": track.bitrate,
+        "is_default": track.is_default,
+        "is_forced": track.is_forced,
+        "title": track.title,
+    }
+
+
+async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioPreferences:
+    """Load per-user audio preferences with safe defaults."""
+    result = await db.execute(
+        select(UserPreference).where(
+            UserPreference.user_id == user_id,
+            UserPreference.key == "audio_preferences",
+        )
+    )
+    pref = result.scalar_one_or_none()
+    if not pref or not pref.value:
+        return AudioPreferences()
+
+    try:
+        parsed = AudioPreferencesSchema.model_validate_json(pref.value)
+    except Exception:
+        return AudioPreferences()
+
+    return AudioPreferences(
+        require_english_non_anime=parsed.require_english_non_anime,
+        require_japanese_anime=parsed.require_japanese_anime,
+        require_dual_audio_anime=parsed.require_dual_audio_anime,
+        check_default_track=parsed.check_default_track,
+        preferred_codecs=parsed.preferred_codecs,
+        auto_fix_english_default_non_anime=parsed.auto_fix_english_default_non_anime,
     )
 
 
@@ -606,3 +656,73 @@ async def get_media_file(
         )
 
     return _build_media_file_response(mf)
+
+
+@router.post("/files/{file_id}/default-audio", response_model=UpdateDefaultAudioResponse)
+async def update_media_file_default_audio(
+    file_id: int,
+    request: UpdateDefaultAudioRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Manually set default audio language for a media file."""
+    result = await db.execute(
+        select(MediaFile)
+        .options(selectinload(MediaFile.audio_tracks), selectinload(MediaFile.show))
+        .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
+    )
+    mf = result.scalar_one_or_none()
+
+    if not mf:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
+
+    target_language = request.language.strip().lower()
+    track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
+    if not track_dicts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
+
+    if not set_default_track_by_language(mf.file_path, track_dicts, target_language):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to set default audio track. Ensure the file is MKV, mkvpropedit is installed, and the language exists.",
+        )
+
+    analyzer = AudioAnalyzer()
+    refreshed_audio = analyzer.analyze(mf.file_path)
+    refreshed_tracks = refreshed_audio.get("audio_tracks", [])
+
+    await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == mf.id))
+    for track_info in refreshed_tracks:
+        db.add(
+            AudioTrack(
+                media_file_id=mf.id,
+                track_index=track_info.get("index", 0),
+                language=track_info.get("language"),
+                language_raw=track_info.get("language_raw"),
+                codec=track_info.get("codec"),
+                channels=track_info.get("channels"),
+                channel_layout=track_info.get("channel_layout"),
+                bitrate=track_info.get("bitrate"),
+                is_default=track_info.get("is_default", False),
+                is_forced=track_info.get("is_forced", False),
+                title=track_info.get("title"),
+            )
+        )
+
+    mf.container_format = refreshed_audio.get("container")
+    mf.duration_ms = refreshed_audio.get("duration_ms")
+
+    audio_preferences = await _load_user_audio_preferences(db, current_user.id)
+    preference_engine = PreferenceEngine(audio_preferences)
+    is_anime = bool(mf.show and mf.show.is_anime)
+    issues = preference_engine.evaluate(refreshed_tracks, is_anime=is_anime)
+    mf.has_issues = len(issues) > 0
+    mf.issue_details = "; ".join(issues) if issues else None
+
+    await db.flush()
+    await db.refresh(mf, attribute_names=["audio_tracks", "show"])
+
+    return UpdateDefaultAudioResponse(
+        message=f"Default audio updated to '{target_language}'.",
+        media_file=_build_media_file_response(mf),
+    )
