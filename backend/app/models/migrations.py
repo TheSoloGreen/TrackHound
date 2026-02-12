@@ -49,10 +49,13 @@ async def apply_token_encryption_migration(conn: AsyncConnection) -> None:
 
 async def apply_ownership_migrations(conn: AsyncConnection) -> None:
     """Add per-user ownership columns and backfill old rows."""
-    inspector = inspect(conn.sync_connection)
-
     for table_name in ("shows", "media_files", "scan_locations"):
-        columns = {c["name"] for c in inspector.get_columns(table_name)}
+        columns = await conn.run_sync(
+            lambda sync_conn, current_table=table_name: {
+                c["name"]
+                for c in inspect(sync_conn).get_columns(current_table)
+            }
+        )
         if "user_id" not in columns:
             await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN user_id INTEGER"))
 
