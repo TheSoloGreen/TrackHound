@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
@@ -28,7 +28,21 @@ export default function FilesPage() {
   const [search, setSearch] = useState('')
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const debouncedSearch = useDebounce(search, 300)
+
+  const updateDefaultAudio = useMutation({
+    mutationFn: ({ fileId, language }: { fileId: number; language: string }) =>
+      mediaApi.updateDefaultAudio(fileId, language),
+    onSuccess: () => {
+      setActionError(null)
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => {
+      setActionError('Failed to update default audio track. Ensure this is an MKV file and the language exists.')
+    },
+  })
 
   const { data, isLoading, error } = useQuery<PaginatedResponse<MediaFile>>({
     queryKey: ['files', page, debouncedSearch, hasIssues],
@@ -101,6 +115,12 @@ export default function FilesPage() {
       {error && (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
           <p className="text-sm text-red-700 dark:text-red-400">Failed to load files. Please try again.</p>
+        </div>
+      )}
+
+      {actionError && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">{actionError}</p>
         </div>
       )}
 
@@ -183,6 +203,22 @@ export default function FilesPage() {
                               <p className="text-sm text-red-600 dark:text-red-400">{file.issue_details}</p>
                             </div>
                           )}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Set default audio:</span>
+                            {[...new Set(file.audio_tracks.map((track) => (track.language || '').toLowerCase()).filter(Boolean))].map((lang) => (
+                              <button
+                                key={lang}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  updateDefaultAudio.mutate({ fileId: file.id, language: lang })
+                                }}
+                                disabled={updateDefaultAudio.isPending}
+                                className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                              >
+                                {lang.toUpperCase()}
+                              </button>
+                            ))}
+                          </div>
                           <div>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Audio Tracks:</span>
                             <div className="mt-2 space-y-2">

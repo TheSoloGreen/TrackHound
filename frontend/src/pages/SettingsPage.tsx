@@ -425,6 +425,32 @@ export default function SettingsPage() {
               </p>
             </div>
           </label>
+
+
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={settings?.audio_preferences.auto_fix_english_default_non_anime ?? false}
+              onChange={(e) => {
+                if (!settings) return
+                updateSettings.mutate({
+                  audio_preferences: {
+                    ...settings.audio_preferences,
+                    auto_fix_english_default_non_anime: e.target.checked,
+                  },
+                })
+              }}
+              className="w-4 h-4 text-orange-500 rounded"
+            />
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">
+                Auto-fix default to English (non-anime)
+              </span>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Automatically set English as default during scans for non-anime files when available
+              </p>
+            </div>
+          </label>
         </div>
       </section>
 

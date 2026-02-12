@@ -112,6 +112,7 @@ export interface AudioPreferences {
   require_dual_audio_anime: boolean
   check_default_track: boolean
   preferred_codecs: string[]
+  auto_fix_english_default_non_anime: boolean
 }
 
 export interface AnimeDetectionSettings {

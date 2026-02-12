@@ -280,6 +280,7 @@ class AudioPreferences(BaseModel):
     require_dual_audio_anime: bool = True
     check_default_track: bool = True
     preferred_codecs: list[str] = []  # Empty = no preference
+    auto_fix_english_default_non_anime: bool = False
 
 
 class AnimeDetectionSettings(BaseModel):
@@ -303,6 +304,19 @@ class UserSettingsUpdate(BaseModel):
     audio_preferences: Optional[AudioPreferences] = None
     anime_detection: Optional[AnimeDetectionSettings] = None
     file_extensions: Optional[list[str]] = None
+
+
+class UpdateDefaultAudioRequest(BaseModel):
+    """Request to set a media file default audio track by language."""
+
+    language: str = Field(min_length=2, max_length=10)
+
+
+class UpdateDefaultAudioResponse(BaseModel):
+    """Response after applying a default audio update."""
+
+    message: str
+    media_file: MediaFileResponse
 
 
 # ============== Stats Schemas ==============

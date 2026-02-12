@@ -67,6 +67,8 @@ export const mediaApi = {
   getFiles: (params?: { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string }) =>
     api.get('/api/media/files', { params }),
   getFile: (id: number) => api.get(`/api/media/files/${id}`),
+  updateDefaultAudio: (id: number, language: string) =>
+    api.post(`/api/media/files/${id}/default-audio`, { language }),
 }
 
 // Settings API

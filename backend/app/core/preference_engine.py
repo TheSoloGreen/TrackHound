@@ -13,6 +13,7 @@ class AudioPreferences:
     require_dual_audio_anime: bool = True
     check_default_track: bool = True
     preferred_codecs: list[str] = field(default_factory=list)
+    auto_fix_english_default_non_anime: bool = False
 
 
 @dataclass
