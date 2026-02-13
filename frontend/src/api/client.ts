@@ -64,9 +64,9 @@ export const mediaApi = {
     api.patch(`/api/media/shows/${id}`, data),
   getSeason: (showId: number, seasonNumber: number) =>
     api.get(`/api/media/shows/${showId}/seasons/${seasonNumber}`),
-  getFiles: (params?: { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string }) =>
+  getFiles: (params?: { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string; issue_category?: 'missing_required_audio' | 'preferred_not_default' }) =>
     api.get('/api/media/files', { params }),
-  exportFiles: (params?: { format?: 'csv' | 'json'; has_issues?: boolean; show_id?: number; search?: string }) =>
+  exportFiles: (params?: { format?: 'csv' | 'json'; has_issues?: boolean; show_id?: number; search?: string; issue_category?: 'missing_required_audio' | 'preferred_not_default' }) =>
     api.get('/api/media/files-export', { params, responseType: 'blob' }),
   resetFiles: () => api.delete('/api/media/files'),
   getFile: (id: number) => api.get(`/api/media/files/${id}`),

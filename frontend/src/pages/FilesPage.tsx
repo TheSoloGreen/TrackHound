@@ -27,6 +27,7 @@ export default function FilesPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
+  const [issueCategory, setIssueCategory] = useState<'missing_required_audio' | 'preferred_not_default' | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [isResetting, setIsResetting] = useState(false)
@@ -58,13 +59,14 @@ export default function FilesPage() {
   })
 
   const { data, isLoading, error } = useQuery<PaginatedResponse<MediaFile>>({
-    queryKey: ['files', page, debouncedSearch, hasIssues],
+    queryKey: ['files', page, debouncedSearch, hasIssues, issueCategory],
     queryFn: async () => {
       const response = await mediaApi.getFiles({
         page,
         page_size: 25,
         search: debouncedSearch || undefined,
         has_issues: hasIssues,
+        issue_category: issueCategory,
       })
       return response.data
     },
@@ -78,6 +80,7 @@ export default function FilesPage() {
       const response = await mediaApi.exportFiles({
         format,
         has_issues: hasIssues,
+        issue_category: issueCategory,
         search: debouncedSearch || undefined,
       })
 
@@ -191,6 +194,22 @@ export default function FilesPage() {
           <option value="">All Files</option>
           <option value="true">Has Issues</option>
           <option value="false">No Issues</option>
+        </select>
+        <select
+          value={issueCategory ?? ''}
+          onChange={(e) => {
+            setIssueCategory(
+              e.target.value === ''
+                ? undefined
+                : (e.target.value as 'missing_required_audio' | 'preferred_not_default')
+            )
+            setPage(1)
+          }}
+          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+        >
+          <option value="">All Issue Types</option>
+          <option value="missing_required_audio">Missing required audio</option>
+          <option value="preferred_not_default">Preferred audio not default</option>
         </select>
       </div>
 

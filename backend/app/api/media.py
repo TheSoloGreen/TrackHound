@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from math import ceil
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, func, and_, or_, delete
@@ -46,6 +46,7 @@ def _build_media_file_filters(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
+    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = None,
 ) -> list:
     """Build shared media-file filters for list/export endpoints."""
     filters = [MediaFile.user_id == current_user.id]
@@ -66,6 +67,19 @@ def _build_media_file_filters(
         )
     if search:
         filters.append(MediaFile.filename.ilike(f"%{search}%"))
+    if issue_category == "missing_required_audio":
+        filters.append(
+            _build_issue_predicate(
+                "%No audio tracks found%",
+                "%Missing English audio track%",
+                "%Missing Japanese audio track (anime)%",
+                "%Missing English audio for dual audio (anime)%",
+                "%Missing Japanese audio for dual audio (anime)%",
+                "%Missing dual audio (English + Japanese) for anime%",
+            )
+        )
+    elif issue_category == "preferred_not_default":
+        filters.append(_build_issue_predicate("%Default audio track is '%"))
 
     return filters
 
@@ -695,6 +709,7 @@ async def list_media_files(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
+    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = Query(default=None),
 ):
     """List media files with pagination and filters."""
     filters = _build_media_file_filters(
@@ -702,6 +717,7 @@ async def list_media_files(
         has_issues=has_issues,
         show_id=show_id,
         search=search,
+        issue_category=issue_category,
     )
 
     query = select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(*filters)
@@ -818,6 +834,7 @@ async def export_media_files(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
+    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = Query(default=None),
 ):
     """Export filtered media files in CSV or JSON format."""
     filters = _build_media_file_filters(
@@ -825,6 +842,7 @@ async def export_media_files(
         has_issues=has_issues,
         show_id=show_id,
         search=search,
+        issue_category=issue_category,
     )
 
     result = await db.execute(
