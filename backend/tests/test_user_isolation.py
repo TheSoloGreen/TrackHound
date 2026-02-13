@@ -348,3 +348,85 @@ async def test_export_and_reset_files_are_scoped_to_current_user(test_app):
 
     assert user_a_count == 0
     assert user_b_count == 1
+
+
+@pytest.mark.anyio
+async def test_file_issue_category_filters_are_scoped_and_applied(test_app):
+    app, users = test_app
+
+    async with users["session_maker"]() as session:
+        show_a = Show(user_id=users["a"].id, title="A Show", media_type="tv", is_anime=False)
+        show_b = Show(user_id=users["b"].id, title="B Show", media_type="tv", is_anime=False)
+        session.add_all([show_a, show_b])
+        await session.flush()
+
+        session.add_all(
+            [
+                MediaFile(
+                    user_id=users["a"].id,
+                    show_id=show_a.id,
+                    file_path="/media/a/missing.mkv",
+                    filename="missing.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=True,
+                    issue_details="Missing English audio track",
+                ),
+                MediaFile(
+                    user_id=users["a"].id,
+                    show_id=show_a.id,
+                    file_path="/media/a/default.mkv",
+                    filename="default.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=True,
+                    issue_details="Default audio track is 'ja', expected English",
+                ),
+                MediaFile(
+                    user_id=users["a"].id,
+                    show_id=show_a.id,
+                    file_path="/media/a/clean.mkv",
+                    filename="clean.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=False,
+                    issue_details=None,
+                ),
+                MediaFile(
+                    user_id=users["b"].id,
+                    show_id=show_b.id,
+                    file_path="/media/b/other.mkv",
+                    filename="other.mkv",
+                    file_size=100,
+                    last_modified=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    last_scanned=datetime(2024, 1, 2, tzinfo=timezone.utc),
+                    has_issues=True,
+                    issue_details="Missing English audio track",
+                ),
+            ]
+        )
+        await session.commit()
+
+    async def current_user_a():
+        return users["a"]
+
+    app.dependency_overrides[get_current_user] = current_user_a
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        missing_resp = await client.get("/api/media/files?issue_category=missing_required_audio")
+        assert missing_resp.status_code == 200
+        assert [item["filename"] for item in missing_resp.json()["items"]] == ["missing.mkv"]
+
+        default_resp = await client.get("/api/media/files?issue_category=preferred_not_default")
+        assert default_resp.status_code == 200
+        assert [item["filename"] for item in default_resp.json()["items"]] == ["default.mkv"]
+
+        export_resp = await client.get("/api/media/files-export?format=csv&issue_category=missing_required_audio")
+        assert export_resp.status_code == 200
+        assert "missing.mkv" in export_resp.text
+        assert "default.mkv" not in export_resp.text
+        assert "other.mkv" not in export_resp.text
