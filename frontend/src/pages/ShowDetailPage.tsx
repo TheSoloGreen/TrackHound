@@ -120,6 +120,20 @@ export default function ShowDetailPage() {
     },
   })
 
+
+  const rescanShowMutation = useMutation({
+    mutationFn: () => mediaApi.rescanShow(showId),
+    onSuccess: () => {
+      setRescanError(null)
+      queryClient.invalidateQueries({ queryKey: ['show', id] })
+      queryClient.invalidateQueries({ queryKey: ['season', id, selectedSeason] })
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: () => {
+      setRescanError('Failed to rescan series. Please confirm files still exist and try again.')
+    },
+  })
+
   const toggleAnimeMutation = useMutation({
     mutationFn: (isAnime: boolean) =>
       mediaApi.updateShow(showId, { is_anime: isAnime, anime_source: isAnime ? 'manual' : undefined }),
@@ -186,20 +200,30 @@ export default function ShowDetailPage() {
             )}
           </p>
         </div>
-        {/* Only show anime toggle for TV shows */}
-        {show.media_type === 'tv' && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => toggleAnimeMutation.mutate(!show.is_anime)}
-            disabled={toggleAnimeMutation.isPending}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-              show.is_anime
-                ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'
-            }`}
+            onClick={() => rescanShowMutation.mutate()}
+            disabled={rescanShowMutation.isPending}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
           >
-            {show.is_anime ? 'Marked as Anime' : 'Mark as Anime'}
+            <RefreshCw className={`w-4 h-4 ${rescanShowMutation.isPending ? 'animate-spin' : ''}`} />
+            Rescan Series
           </button>
-        )}
+          {/* Only show anime toggle for TV shows */}
+          {show.media_type === 'tv' && (
+            <button
+              onClick={() => toggleAnimeMutation.mutate(!show.is_anime)}
+              disabled={toggleAnimeMutation.isPending}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+                show.is_anime
+                  ? 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-400'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'
+              }`}
+            >
+              {show.is_anime ? 'Marked as Anime' : 'Mark as Anime'}
+            </button>
+          )}
+        </div>
       </div>
 
       {rescanError && (

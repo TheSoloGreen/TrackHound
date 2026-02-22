@@ -25,6 +25,7 @@ from app.models.schemas import (
     DashboardStats,
     UpdateDefaultAudioRequest,
     UpdateDefaultAudioResponse,
+    BulkRescanResponse,
 )
 from app.services.exporter import Exporter
 
@@ -823,6 +824,36 @@ async def rescan_media_file(
     return UpdateDefaultAudioResponse(
         message="File rescan complete.",
         media_file=_build_media_file_response(mf),
+    )
+
+
+@router.post("/shows/{show_id}/rescan", response_model=BulkRescanResponse)
+async def rescan_show_files(
+    show_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Re-analyze every media file in a show for the current user."""
+    show_result = await db.execute(
+        select(Show.id).where(Show.id == show_id, Show.user_id == current_user.id)
+    )
+    if show_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Show not found")
+
+    files_result = await db.execute(
+        select(MediaFile)
+        .options(selectinload(MediaFile.audio_tracks), selectinload(MediaFile.show))
+        .where(MediaFile.show_id == show_id, MediaFile.user_id == current_user.id)
+        .order_by(MediaFile.id)
+    )
+    media_files = files_result.scalars().all()
+
+    for media_file in media_files:
+        await _refresh_media_file_analysis(db, media_file, current_user)
+
+    return BulkRescanResponse(
+        message="Series rescan complete.",
+        files_rescanned=len(media_files),
     )
 
 
