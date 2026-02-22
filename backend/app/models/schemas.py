@@ -319,6 +319,13 @@ class UpdateDefaultAudioResponse(BaseModel):
     media_file: MediaFileResponse
 
 
+class BulkRescanResponse(BaseModel):
+    """Response after bulk rescanning files."""
+
+    message: str
+    files_rescanned: int
+
+
 # ============== Stats Schemas ==============
 
 

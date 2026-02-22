@@ -99,6 +99,9 @@ async def test_user_cannot_view_or_edit_other_users_show(test_app):
         )
         assert patch_resp.status_code == 404
 
+        rescan_resp = await client.post(f"/api/media/shows/{users['show_b_id']}/rescan")
+        assert rescan_resp.status_code == 404
+
 
 @pytest.mark.anyio
 async def test_user_cannot_access_other_users_scan_locations(test_app):

@@ -73,6 +73,7 @@ export const mediaApi = {
   updateDefaultAudio: (id: number, language: string) =>
     api.post(`/api/media/files/${id}/default-audio`, { language }),
   rescanFile: (id: number) => api.post(`/api/media/files/${id}/rescan`),
+  rescanShow: (id: number) => api.post(`/api/media/shows/${id}/rescan`),
 }
 
 // Settings API
