@@ -34,6 +34,12 @@ LANGUAGE_MAP = {
     "ind": "id",
     "msa": "ms",
     "fil": "tl",
+    "ces": "cs",
+    "cze": "cs",
+    "hun": "hu",
+    "ron": "ro",
+    "rum": "ro",
+    "ukr": "uk",
     "und": None,  # Undefined
     # Full names
     "english": "en",
