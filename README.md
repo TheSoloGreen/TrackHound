@@ -81,6 +81,24 @@ npm install
 npm run dev
 ```
 
+### Tests and Build Checks
+
+```bash
+# Backend tests
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements-dev.txt
+python -m pytest -q
+
+# Frontend production build
+cd ../frontend
+npm ci
+npm run build
+```
+
+The GitHub Actions workflow runs both checks on pushes and pull requests to `master`.
+
 ## Configuration
 
 ### Environment Variables
@@ -127,7 +145,7 @@ If your pull request frequently shows conflicts, keep your branch synced before 
 ```bash
 # From your feature branch
 git fetch origin
-git rebase origin/main
+git rebase origin/master
 
 # Resolve any conflicts, then continue
 git add <resolved-files>
