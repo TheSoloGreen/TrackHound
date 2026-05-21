@@ -25,6 +25,8 @@ from app.models.schemas import (
     DashboardStats,
     UpdateDefaultAudioRequest,
     UpdateDefaultAudioResponse,
+    AudioTrackRemovalRequest,
+    AudioTrackRemovalResponse,
     BulkRescanResponse,
 )
 from app.services.exporter import Exporter
@@ -33,7 +35,12 @@ router = APIRouter()
 
 from app.core.analyzer import AudioAnalyzer
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
-from app.core.audio_fixer import set_default_track_by_language
+from app.core.audio_fixer import (
+    AudioTrackRemovalError,
+    build_keep_audio_track_indices,
+    remove_unwanted_audio_tracks,
+    set_default_track_by_language,
+)
 from app.models.schemas import AudioPreferences as AudioPreferencesSchema
 
 
@@ -190,6 +197,25 @@ async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioP
     )
 
 
+
+
+async def _load_user_audio_track_keep_languages(db: AsyncSession, user_id: int) -> list[str]:
+    """Load the user's default audio languages to keep during track removal."""
+    result = await db.execute(
+        select(UserPreference).where(
+            UserPreference.user_id == user_id,
+            UserPreference.key == "audio_preferences",
+        )
+    )
+    pref = result.scalar_one_or_none()
+    if not pref or not pref.value:
+        return AudioPreferencesSchema().audio_track_keep_languages
+
+    try:
+        parsed = AudioPreferencesSchema.model_validate_json(pref.value)
+    except Exception:
+        return AudioPreferencesSchema().audio_track_keep_languages
+    return parsed.audio_track_keep_languages
 
 
 async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_user: User) -> None:
@@ -798,6 +824,65 @@ async def update_media_file_default_audio(
 
     return UpdateDefaultAudioResponse(
         message=f"Default audio updated to '{target_language}'.",
+        media_file=_build_media_file_response(mf),
+    )
+
+
+@router.post("/files/{file_id}/audio-tracks/remove", response_model=AudioTrackRemovalResponse)
+async def remove_media_file_audio_tracks(
+    file_id: int,
+    request: AudioTrackRemovalRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Remove unwanted audio tracks from an MKV file using mkvmerge.
+
+    Users can either provide exact TrackHound audio track indexes to keep or let
+    TrackHound select tracks from language settings. The default language policy
+    keeps English plus undefined tracks (`und`) because undefined could be a
+    useful track until reviewed manually.
+    """
+    result = await db.execute(
+        select(MediaFile)
+        .options(selectinload(MediaFile.audio_tracks), selectinload(MediaFile.show))
+        .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
+    )
+    mf = result.scalar_one_or_none()
+
+    if not mf:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
+
+    track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
+    if not track_dicts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
+
+    keep_track_indices = request.keep_track_indices
+    if keep_track_indices is None:
+        keep_languages = request.keep_languages
+        if keep_languages is None:
+            keep_languages = await _load_user_audio_track_keep_languages(db, current_user.id)
+        keep_track_indices = build_keep_audio_track_indices(
+            track_dicts,
+            keep_languages=keep_languages,
+        )
+
+    try:
+        removal_result = remove_unwanted_audio_tracks(
+            mf.file_path,
+            track_dicts,
+            keep_track_indices=keep_track_indices,
+            keep_backup=request.keep_backup,
+        )
+    except AudioTrackRemovalError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await _refresh_media_file_analysis(db, mf, current_user)
+
+    return AudioTrackRemovalResponse(
+        message="Audio tracks removed." if removal_result.removed_track_indices else "No audio tracks needed removal.",
+        kept_track_indices=removal_result.kept_track_indices,
+        removed_track_indices=removal_result.removed_track_indices,
+        backup_path=removal_result.backup_path,
         media_file=_build_media_file_response(mf),
     )
 
