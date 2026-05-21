@@ -29,6 +29,7 @@ export default function FilesPage() {
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
   const [issueCategory, setIssueCategory] = useState<'missing_required_audio' | 'preferred_not_default' | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const [trackKeepSelections, setTrackKeepSelections] = useState<Record<number, number[]>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [isResetting, setIsResetting] = useState(false)
   const queryClient = useQueryClient()
@@ -55,6 +56,19 @@ export default function FilesPage() {
     },
     onError: () => {
       setActionError('Failed to rescan file. Please confirm the file still exists and try again.')
+    },
+  })
+
+  const removeAudioTracks = useMutation({
+    mutationFn: ({ file, keepTrackIndices }: { file: MediaFile; keepTrackIndices: number[] }) =>
+      mediaApi.removeAudioTracks(file.id, { keep_track_indices: keepTrackIndices, keep_backup: true }),
+    onSuccess: () => {
+      setActionError(null)
+      queryClient.invalidateQueries({ queryKey: ['files'] })
+    },
+    onError: (error: unknown) => {
+      const maybeAxiosError = error as { response?: { data?: { detail?: string } } }
+      setActionError(maybeAxiosError.response?.data?.detail || 'Failed to remove audio tracks. Confirm this is an MKV file and mkvmerge is installed.')
     },
   })
 
@@ -130,6 +144,45 @@ export default function FilesPage() {
     if (gb >= 1) return `${gb.toFixed(2)} GB`
     const mb = bytes / (1024 * 1024)
     return `${mb.toFixed(1)} MB`
+  }
+
+  const defaultKeepTrackIndices = (file: MediaFile) =>
+    file.audio_tracks
+      .filter((track) => (track.language || track.language_raw || 'und').toLowerCase() === 'en' || (track.language_raw || '').toLowerCase() === 'und' || !track.language)
+      .map((track) => track.track_index)
+
+  const selectedKeepTrackIndices = (file: MediaFile) =>
+    trackKeepSelections[file.id] ?? defaultKeepTrackIndices(file)
+
+  const toggleKeepTrack = (file: MediaFile, trackIndex: number) => {
+    const selected = new Set(selectedKeepTrackIndices(file))
+    if (selected.has(trackIndex)) {
+      selected.delete(trackIndex)
+    } else {
+      selected.add(trackIndex)
+    }
+    setTrackKeepSelections((prev) => ({
+      ...prev,
+      [file.id]: [...selected].sort((a, b) => a - b),
+    }))
+  }
+
+  const handleRemoveAudioTracks = (file: MediaFile) => {
+    const keepTrackIndices = selectedKeepTrackIndices(file)
+    const removeCount = file.audio_tracks.length - keepTrackIndices.length
+    if (keepTrackIndices.length === 0) {
+      setActionError('Select at least one audio track to keep.')
+      return
+    }
+    if (removeCount <= 0) {
+      setActionError('Select fewer tracks to keep before removing audio tracks.')
+      return
+    }
+    const confirmed = window.confirm(
+      `Remove ${removeCount} audio track${removeCount === 1 ? '' : 's'} from ${file.filename}? TrackHound will keep a .bak fallback beside the original file.`
+    )
+    if (!confirmed) return
+    removeAudioTracks.mutate({ file, keepTrackIndices })
   }
 
   return (
@@ -331,6 +384,46 @@ export default function FilesPage() {
                                 {lang.toUpperCase()}
                               </button>
                             ))}
+                          </div>
+                          <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-3">
+                            <div>
+                              <span className="text-sm font-medium text-amber-800 dark:text-amber-300">Remove audio tracks:</span>
+                              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                                Select the audio tracks to keep. Default selection keeps English and UND tracks.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {file.audio_tracks.map((track) => {
+                                const selected = selectedKeepTrackIndices(file).includes(track.track_index)
+                                return (
+                                  <label
+                                    key={track.id}
+                                    className="inline-flex items-center gap-2 px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selected}
+                                      onChange={() => toggleKeepTrack(file, track.track_index)}
+                                      className="w-3.5 h-3.5 text-orange-500 rounded"
+                                    />
+                                    Keep #{track.track_index} {track.language?.toUpperCase() || track.language_raw?.toUpperCase() || 'UND'}
+                                  </label>
+                                )
+                              })}
+                            </div>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleRemoveAudioTracks(file)
+                              }}
+                              disabled={removeAudioTracks.isPending}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              {removeAudioTracks.isPending && removeAudioTracks.variables?.file.id === file.id
+                                ? 'Removing...'
+                                : 'Remove Unchecked Tracks'}
+                            </button>
                           </div>
                           <div>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Audio Tracks:</span>

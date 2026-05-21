@@ -451,6 +451,52 @@ export default function SettingsPage() {
               </p>
             </div>
           </label>
+
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+            <div>
+              <span className="font-medium text-gray-900 dark:text-white">
+                Default audio tracks to keep when removing tracks
+              </span>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Used by the removal tool when you do not manually override track selection. UND stays enabled by default because it can be mislabeled English.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              {[
+                { value: 'en', label: 'English' },
+                { value: 'und', label: 'Undefined / UND' },
+                { value: 'ja', label: 'Japanese' },
+              ].map((option) => {
+                const keepLanguages = settings?.audio_preferences.audio_track_keep_languages ?? ['en', 'und']
+                const checked = keepLanguages.includes(option.value)
+                return (
+                  <label key={option.value} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        if (!settings) return
+                        const current = new Set(settings.audio_preferences.audio_track_keep_languages ?? ['en', 'und'])
+                        if (e.target.checked) {
+                          current.add(option.value)
+                        } else {
+                          current.delete(option.value)
+                        }
+                        updateSettings.mutate({
+                          audio_preferences: {
+                            ...settings.audio_preferences,
+                            audio_track_keep_languages: [...current],
+                          },
+                        })
+                      }}
+                      className="w-4 h-4 text-orange-500 rounded"
+                    />
+                    {option.label}
+                  </label>
+                )
+              })}
+            </div>
+          </div>
         </div>
       </section>
 

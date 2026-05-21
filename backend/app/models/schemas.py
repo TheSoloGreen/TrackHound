@@ -273,7 +273,7 @@ class ShowListResponse(BaseModel):
 
 
 class AudioPreferences(BaseModel):
-    """Audio preference rules."""
+    """User audio preference rules."""
 
     require_english_non_anime: bool = True
     require_japanese_anime: bool = True
@@ -281,6 +281,7 @@ class AudioPreferences(BaseModel):
     check_default_track: bool = True
     preferred_codecs: list[str] = []  # Empty = no preference
     auto_fix_english_default_non_anime: bool = False
+    audio_track_keep_languages: list[str] = ["en", "und"]
 
 
 class AnimeDetectionSettings(BaseModel):
@@ -316,6 +317,24 @@ class UpdateDefaultAudioResponse(BaseModel):
     """Response after applying a default audio update."""
 
     message: str
+    media_file: MediaFileResponse
+
+
+class AudioTrackRemovalRequest(BaseModel):
+    """Request to remove unwanted audio tracks from an MKV file."""
+
+    keep_track_indices: Optional[list[int]] = None
+    keep_languages: Optional[list[str]] = None
+    keep_backup: bool = True
+
+
+class AudioTrackRemovalResponse(BaseModel):
+    """Response after removing unwanted audio tracks from an MKV file."""
+
+    message: str
+    kept_track_indices: list[int]
+    removed_track_indices: list[int]
+    backup_path: Optional[str] = None
     media_file: MediaFileResponse
 
 

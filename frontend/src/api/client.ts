@@ -72,6 +72,10 @@ export const mediaApi = {
   getFile: (id: number) => api.get(`/api/media/files/${id}`),
   updateDefaultAudio: (id: number, language: string) =>
     api.post(`/api/media/files/${id}/default-audio`, { language }),
+  removeAudioTracks: (
+    id: number,
+    data: { keep_track_indices?: number[]; keep_languages?: string[]; keep_backup?: boolean }
+  ) => api.post(`/api/media/files/${id}/audio-tracks/remove`, data),
   rescanFile: (id: number) => api.post(`/api/media/files/${id}/rescan`),
   rescanShow: (id: number) => api.post(`/api/media/shows/${id}/rescan`),
 }
