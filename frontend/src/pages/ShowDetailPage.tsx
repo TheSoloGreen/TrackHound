@@ -2,6 +2,7 @@ import { useParams, Link, useLocation } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, AlertTriangle, RefreshCw } from 'lucide-react'
 import { mediaApi } from '../api/client'
+import { refreshLibrary } from '../api/cache'
 import type { ShowDetail, SeasonDetail, MediaFile, MediaType } from '../types'
 import { useState } from 'react'
 
@@ -111,12 +112,11 @@ export default function ShowDetailPage() {
     mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
     onSuccess: () => {
       setRescanError(null)
-      queryClient.invalidateQueries({ queryKey: ['show', id] })
-      queryClient.invalidateQueries({ queryKey: ['season', id, selectedSeason] })
-      queryClient.invalidateQueries({ queryKey: ['files'] })
+      return refreshLibrary(queryClient)
     },
     onError: () => {
       setRescanError('Failed to rescan file. Please confirm the file still exists and try again.')
+      void refreshLibrary(queryClient)
     },
   })
 
@@ -125,12 +125,11 @@ export default function ShowDetailPage() {
     mutationFn: () => mediaApi.rescanShow(showId),
     onSuccess: () => {
       setRescanError(null)
-      queryClient.invalidateQueries({ queryKey: ['show', id] })
-      queryClient.invalidateQueries({ queryKey: ['season', id, selectedSeason] })
-      queryClient.invalidateQueries({ queryKey: ['files'] })
+      return refreshLibrary(queryClient)
     },
     onError: () => {
       setRescanError('Failed to rescan series. Please confirm files still exist and try again.')
+      void refreshLibrary(queryClient)
     },
   })
 
@@ -138,10 +137,10 @@ export default function ShowDetailPage() {
     mutationFn: (isAnime: boolean) =>
       mediaApi.updateShow(showId, { is_anime: isAnime, anime_source: isAnime ? 'manual' : undefined }),
     onSuccess: () => {
-      return Promise.all(['show', 'shows', 'stats', 'files', 'season'].map(
-        (key) => queryClient.invalidateQueries({ queryKey: [key] })
-      ))
+      setRescanError(null)
+      return refreshLibrary(queryClient)
     },
+    onError: () => { setRescanError('Failed to update classification. Please try again.') },
   })
 
   if (isLoading) {
@@ -295,7 +294,7 @@ export default function ShowDetailPage() {
           {/* Episode List */}
           <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
             <h2 className="font-semibold text-gray-900 dark:text-white mb-4">
-              {selectedSeason ? `Season ${selectedSeason} Episodes` : 'Select a season'}
+              {selectedSeason !== null ? `Season ${selectedSeason} Episodes` : 'Select a season'}
             </h2>
             {seasonLoading ? (
               <div className="flex items-center justify-center py-8">

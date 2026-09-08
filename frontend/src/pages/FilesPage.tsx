@@ -2,6 +2,7 @@ import { Fragment, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw, Trash2 } from 'lucide-react'
 import { mediaApi } from '../api/client'
+import { refreshLibrary } from '../api/cache'
 import { useDebounce } from '../hooks/useDebounce'
 import type { MediaFile, PaginatedResponse, AudioTrackRemovalPlan } from '../types'
 import { isAxiosError } from 'axios'
@@ -38,9 +39,7 @@ export default function FilesPage() {
 
   const refreshMedia = () => {
     setTrackKeepSelections({})
-    return Promise.all(['files', 'stats', 'shows', 'show', 'season', 'trackRemovalPlan'].map(
-      (key) => queryClient.invalidateQueries({ queryKey: [key] })
-    ))
+    return refreshLibrary(queryClient)
   }
 
   const showActionError = (error: unknown) => {
@@ -140,11 +139,7 @@ export default function FilesPage() {
       await mediaApi.resetFiles()
       setExpandedFile(null)
       setPage(1)
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['files'] }),
-        queryClient.invalidateQueries({ queryKey: ['stats'] }),
-        queryClient.invalidateQueries({ queryKey: ['shows'] }),
-      ])
+      await refreshMedia()
     } catch {
       setActionError('Failed to reset scanned files. Please try again.')
     } finally {

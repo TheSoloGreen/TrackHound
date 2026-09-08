@@ -6,12 +6,14 @@ import {
   AlertTriangle,
   Play,
   Square,
-  RefreshCw,
   FileVideo,
   Sparkles,
 } from 'lucide-react'
 import { mediaApi, scanApi } from '../api/client'
 import type { DashboardStats, ScanStatus } from '../types'
+import { useScanStatus } from '../hooks/useScanStatus'
+import ScanSummary from '../components/ScanSummary'
+import { useState } from 'react'
 
 function StatCard({
   icon: Icon,
@@ -58,31 +60,19 @@ export default function DashboardPage() {
     },
   })
 
-  const { data: scanStatus } = useQuery<ScanStatus>({
-    queryKey: ['scanStatus'],
-    queryFn: async () => {
-      const response = await scanApi.getStatus()
-      return response.data
-    },
-    refetchInterval: (query) => {
-      return query.state.data?.is_running ? 2000 : 10000
-    },
-  })
+  const { data: scanStatus } = useScanStatus()
+  const [incremental, setIncremental] = useState(true)
 
   const startScan = useMutation({
-    mutationFn: () => scanApi.start({ incremental: true }),
+    mutationFn: () => scanApi.start({ incremental }),
     onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: ['scanStatus'] })
       const previousStatus = queryClient.getQueryData<ScanStatus>(['scanStatus'])
 
       queryClient.setQueryData<ScanStatus>(['scanStatus'], {
-        is_running: true,
-        current_location: previousStatus?.current_location ?? null,
-        files_scanned: previousStatus?.files_scanned ?? 0,
-        files_total: previousStatus?.files_total ?? 0,
-        current_file: previousStatus?.current_file ?? 'Starting...',
-        started_at: previousStatus?.started_at ?? null,
-        errors: previousStatus?.errors ?? [],
+        is_running: true, outcome: 'running', current_location: null,
+        files_scanned: 0, files_total: 0, files_removed: 0, current_file: 'Starting…',
+        started_at: null, finished_at: null, errors: [], warnings: [], error_count: 0, warning_count: 0,
       })
 
       return { previousStatus }
@@ -121,7 +111,11 @@ export default function DashboardPage() {
             Overview of your media library audio tracks
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          {!isScanning && <label className="text-sm text-gray-700 dark:text-gray-300">
+            <input type="checkbox" checked={!incremental} onChange={(event) => setIncremental(!event.target.checked)} className="mr-2" />
+            Full scan
+          </label>}
           {isScanning ? (
             <button
               onClick={() => cancelScan.mutate()}
@@ -144,35 +138,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Scan Status */}
-      {isScanning && scanStatus && (
-        <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4">
-          <div className="flex items-center gap-3 mb-3">
-            <RefreshCw className="w-5 h-5 text-orange-600 dark:text-orange-400 animate-spin" />
-            <span className="font-medium text-orange-800 dark:text-orange-300">
-              Scan in progress...
-            </span>
-          </div>
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-orange-700 dark:text-orange-400">
-                {scanStatus.current_file || 'Starting...'}
-              </span>
-              <span className="text-orange-700 dark:text-orange-400">
-                {scanStatus.files_scanned} / {scanStatus.files_total || '?'}
-              </span>
-            </div>
-            <div className="w-full bg-orange-200 dark:bg-orange-800 rounded-full h-2">
-              <div
-                className="bg-orange-500 h-2 rounded-full transition-all duration-300"
-                style={{
-                  width: `${scanStatus.files_total ? (scanStatus.files_scanned / scanStatus.files_total) * 100 : 0}%`,
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <ScanSummary status={scanStatus} />
 
       {/* Error message */}
       {statsError && (
@@ -188,19 +154,6 @@ export default function DashboardPage() {
             {startScan.isError ? 'Failed to start scan.' : 'Failed to cancel scan.'} Please try again.
           </p>
         </div>
-      )}
-
-      {/* Stats Grid */}
-      {!!scanStatus?.errors.length && (
-        <details className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
-          <summary className="cursor-pointer text-sm text-red-700 dark:text-red-400">
-            {scanStatus.errors.length} scan error{scanStatus.errors.length === 1 ? '' : 's'} reported
-          </summary>
-          <ul className="mt-2 space-y-1 text-sm text-red-700 dark:text-red-400 break-words">
-            {scanStatus.errors.slice(0, 50).map((message, index) => <li key={index}>{message}</li>)}
-          </ul>
-          {scanStatus.errors.length > 50 && <p className="mt-2 text-sm text-red-700 dark:text-red-400">Showing the first 50 errors.</p>}
-        </details>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

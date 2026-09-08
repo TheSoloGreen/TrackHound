@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { useScanStatus } from '../hooks/useScanStatus'
 import {
   LayoutDashboard,
   Library,
@@ -23,6 +24,7 @@ const navItems = [
 ]
 
 export default function Layout({ children }: LayoutProps) {
+  useScanStatus()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)

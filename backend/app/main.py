@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+from app.static import SPAStaticFiles
 
 from app.config import get_settings
 from app.models.database import init_db
@@ -74,7 +74,7 @@ async def health_check():
 # Serve static frontend files in production
 static_path = Path(__file__).parent.parent / "static"
 if static_path.exists():
-    app.mount("/", StaticFiles(directory=str(static_path), html=True), name="static")
+    app.mount("/", SPAStaticFiles(directory=str(static_path), html=True), name="static")
 
 
 if __name__ == "__main__":
