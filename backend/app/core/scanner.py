@@ -361,7 +361,7 @@ class MediaScanner:
         media_file.file_size = stat.st_size
         media_file.container_format = audio_info.get("container")
         media_file.duration_ms = audio_info.get("duration_ms")
-        media_file.last_scanned = datetime.now(timezone.utc)
+        media_file.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
         media_file.last_modified = file_mtime
 
         await db.flush()
@@ -503,7 +503,7 @@ async def run_scan(
                 )
                 scan_loc = result.scalar_one_or_none()
                 if scan_loc:
-                    scan_loc.last_scanned = datetime.now(timezone.utc)
+                    scan_loc.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
                     file_count = (
                         await db.scalar(
                             select(func.count(MediaFile.id)).where(

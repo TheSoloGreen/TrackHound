@@ -205,7 +205,7 @@ async def complete_plex_login(
             user.plex_email = plex_email
             user.plex_token = encrypt_value(auth_token)
             user.plex_thumb_url = plex_thumb
-            user.last_login = datetime.now(timezone.utc)
+            user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
         else:
             # Create new user
             user = User(

@@ -8,8 +8,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def _utcnow() -> datetime:
-    """Return current UTC time (timezone-aware)."""
-    return datetime.now(timezone.utc)
+    """Return UTC without an offset for the existing TIMESTAMP columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
