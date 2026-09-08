@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   trackhound:
     build: .
@@ -11,11 +9,13 @@ services:
       - /mnt/user/Media/TV:/media/tv:ro
       - /mnt/user/Media/Anime:/media/anime:ro
     environment:
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set — generate with: openssl rand -hex 32}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set — generate with: openssl rand -base64 32}
+      - SECRET_KEY=${SECRET_KEY:?Set SECRET_KEY in .env}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?Set ENCRYPTION_KEY in .env}
       - DATABASE_URL=postgresql+asyncpg://trackhound:${POSTGRES_PASSWORD:-trackhound}@db:5432/trackhound
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8080}
       - ENVIRONMENT=production
+      - ALLOWED_PLEX_USER_IDS=${ALLOWED_PLEX_USER_IDS:-}
+      - MEDIA_WRITES_ENABLED=${MEDIA_WRITES_ENABLED:-false}
     depends_on:
       db:
         condition: service_healthy

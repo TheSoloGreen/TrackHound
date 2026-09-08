@@ -173,6 +173,15 @@ class AudioTrackResponse(BaseModel):
 # ============== Media File Schemas ==============
 
 
+class MediaEditCapabilities(BaseModel):
+    """Available file edits and actionable reasons when disabled."""
+
+    set_default_audio: bool
+    remove_audio_tracks: bool
+    default_audio_reason: Optional[str] = None
+    track_removal_reason: Optional[str] = None
+
+
 class MediaFileResponse(BaseModel):
     """Media file information."""
 
@@ -190,6 +199,7 @@ class MediaFileResponse(BaseModel):
     has_issues: bool
     issue_details: Optional[str] = None
     audio_tracks: list[AudioTrackResponse] = []
+    edit_capabilities: Optional[MediaEditCapabilities] = None
 
 
 class MediaFileListResponse(BaseModel):
@@ -326,6 +336,15 @@ class AudioTrackRemovalRequest(BaseModel):
     keep_track_indices: Optional[list[int]] = None
     keep_languages: Optional[list[str]] = None
     keep_backup: bool = True
+    expected_last_scanned: Optional[datetime] = None
+
+
+class AudioTrackRemovalPlan(BaseModel):
+    """Default selection computed from the user's saved policy."""
+
+    file_id: int
+    last_scanned: datetime
+    keep_track_indices: list[int]
 
 
 class AudioTrackRemovalResponse(BaseModel):

@@ -3,7 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw, Trash2 } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
-import type { MediaFile, PaginatedResponse } from '../types'
+import type { MediaFile, PaginatedResponse, AudioTrackRemovalPlan } from '../types'
+import { isAxiosError } from 'axios'
 
 function AudioTrackBadge({ track }: { track: MediaFile['audio_tracks'][0] }) {
   const langColors: Record<string, string> = {
@@ -29,22 +30,33 @@ export default function FilesPage() {
   const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
   const [issueCategory, setIssueCategory] = useState<'missing_required_audio' | 'preferred_not_default' | undefined>(undefined)
   const [expandedFile, setExpandedFile] = useState<number | null>(null)
-  const [trackKeepSelections, setTrackKeepSelections] = useState<Record<number, number[]>>({})
+  const [trackKeepSelections, setTrackKeepSelections] = useState<Record<string, number[]>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [isResetting, setIsResetting] = useState(false)
   const queryClient = useQueryClient()
   const debouncedSearch = useDebounce(search, 300)
+
+  const refreshMedia = () => {
+    setTrackKeepSelections({})
+    return Promise.all(['files', 'stats', 'shows', 'show', 'season', 'trackRemovalPlan'].map(
+      (key) => queryClient.invalidateQueries({ queryKey: [key] })
+    ))
+  }
+
+  const showActionError = (error: unknown) => {
+    setActionError(isAxiosError(error) && typeof error.response?.data?.detail === 'string'
+      ? error.response.data.detail : 'The operation failed. Please try again.')
+    void refreshMedia()
+  }
 
   const updateDefaultAudio = useMutation({
     mutationFn: ({ fileId, language }: { fileId: number; language: string }) =>
       mediaApi.updateDefaultAudio(fileId, language),
     onSuccess: () => {
       setActionError(null)
-      queryClient.invalidateQueries({ queryKey: ['files'] })
+      return refreshMedia()
     },
-    onError: () => {
-      setActionError('Failed to update default audio track. Ensure this is an MKV file and the language exists.')
-    },
+    onError: showActionError,
   })
 
 
@@ -52,24 +64,19 @@ export default function FilesPage() {
     mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
     onSuccess: () => {
       setActionError(null)
-      queryClient.invalidateQueries({ queryKey: ['files'] })
+      return refreshMedia()
     },
-    onError: () => {
-      setActionError('Failed to rescan file. Please confirm the file still exists and try again.')
-    },
+    onError: showActionError,
   })
 
   const removeAudioTracks = useMutation({
     mutationFn: ({ file, keepTrackIndices }: { file: MediaFile; keepTrackIndices: number[] }) =>
-      mediaApi.removeAudioTracks(file.id, { keep_track_indices: keepTrackIndices, keep_backup: true }),
+      mediaApi.removeAudioTracks(file.id, { keep_track_indices: keepTrackIndices, keep_backup: true, expected_last_scanned: file.last_scanned }),
     onSuccess: () => {
       setActionError(null)
-      queryClient.invalidateQueries({ queryKey: ['files'] })
+      return refreshMedia()
     },
-    onError: (error: unknown) => {
-      const maybeAxiosError = error as { response?: { data?: { detail?: string } } }
-      setActionError(maybeAxiosError.response?.data?.detail || 'Failed to remove audio tracks. Confirm this is an MKV file and mkvmerge is installed.')
-    },
+    onError: showActionError,
   })
 
   const { data, isLoading, error } = useQuery<PaginatedResponse<MediaFile>>({
@@ -86,6 +93,12 @@ export default function FilesPage() {
     },
   })
 
+  const expandedMediaFile = data?.items.find((file) => file.id === expandedFile)
+  const { data: removalPlan, isFetching: planLoading, error: planError } = useQuery<AudioTrackRemovalPlan>({
+    queryKey: ['trackRemovalPlan', expandedFile, expandedMediaFile?.last_scanned],
+    queryFn: async () => (await mediaApi.getAudioTrackRemovalPlan(expandedFile!)).data,
+    enabled: !!expandedMediaFile,
+  })
 
 
   const handleExport = async (format: 'csv' | 'json' = 'csv') => {
@@ -146,13 +159,9 @@ export default function FilesPage() {
     return `${mb.toFixed(1)} MB`
   }
 
-  const defaultKeepTrackIndices = (file: MediaFile) =>
-    file.audio_tracks
-      .filter((track) => (track.language || track.language_raw || 'und').toLowerCase() === 'en' || (track.language_raw || '').toLowerCase() === 'und' || !track.language)
-      .map((track) => track.track_index)
-
   const selectedKeepTrackIndices = (file: MediaFile) =>
-    trackKeepSelections[file.id] ?? defaultKeepTrackIndices(file)
+    trackKeepSelections[`${file.id}:${file.last_scanned}`] ??
+      (removalPlan?.file_id === file.id && removalPlan.last_scanned === file.last_scanned ? removalPlan.keep_track_indices : [])
 
   const toggleKeepTrack = (file: MediaFile, trackIndex: number) => {
     const selected = new Set(selectedKeepTrackIndices(file))
@@ -163,11 +172,12 @@ export default function FilesPage() {
     }
     setTrackKeepSelections((prev) => ({
       ...prev,
-      [file.id]: [...selected].sort((a, b) => a - b),
+      [`${file.id}:${file.last_scanned}`]: [...selected].sort((a, b) => a - b),
     }))
   }
 
   const handleRemoveAudioTracks = (file: MediaFile) => {
+    if (planLoading || planError || !file.edit_capabilities?.remove_audio_tracks) return
     const keepTrackIndices = selectedKeepTrackIndices(file)
     const removeCount = file.audio_tracks.length - keepTrackIndices.length
     if (keepTrackIndices.length === 0) {
@@ -178,8 +188,12 @@ export default function FilesPage() {
       setActionError('Select fewer tracks to keep before removing audio tracks.')
       return
     }
+    const describe = (keep: boolean) => file.audio_tracks
+      .filter((track) => keepTrackIndices.includes(track.track_index) === keep)
+      .map((track) => `#${track.track_index} ${(track.language || track.language_raw || 'und').toUpperCase()}${track.title ? ` (${track.title})` : ''}`)
+      .join(', ')
     const confirmed = window.confirm(
-      `Remove ${removeCount} audio track${removeCount === 1 ? '' : 's'} from ${file.filename}? TrackHound will keep a .bak fallback beside the original file.`
+      `Edit ${file.filename}?\n\nKeep: ${describe(true)}\nRemove: ${describe(false)}\n\nThe original will be preserved as a .bak file. Existing backups will not be overwritten.`
     )
     if (!confirmed) return
     removeAudioTracks.mutate({ file, keepTrackIndices })
@@ -378,18 +392,25 @@ export default function FilesPage() {
                                   e.stopPropagation()
                                   updateDefaultAudio.mutate({ fileId: file.id, language: lang })
                                 }}
-                                disabled={updateDefaultAudio.isPending}
+                                disabled={updateDefaultAudio.isPending || removeAudioTracks.isPending || !file.edit_capabilities?.set_default_audio}
+                                title={file.edit_capabilities?.default_audio_reason || undefined}
                                 className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
                               >
                                 {lang.toUpperCase()}
                               </button>
                             ))}
                           </div>
+                          {file.edit_capabilities?.default_audio_reason && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{file.edit_capabilities.default_audio_reason}</p>
+                          )}
                           <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 p-3 space-y-3">
                             <div>
                               <span className="text-sm font-medium text-amber-800 dark:text-amber-300">Remove audio tracks:</span>
                               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                                Select the audio tracks to keep. Default selection keeps English and UND tracks.
+                                Select the tracks to keep. The initial selection uses your saved language preferences.
+                              </p>
+                              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1" role="status">
+                                {file.edit_capabilities?.track_removal_reason || (planError ? 'Unable to load saved track preferences. Try reopening this file.' : planLoading ? 'Loading saved track preferences...' : '')}
                               </p>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -403,6 +424,7 @@ export default function FilesPage() {
                                     <input
                                       type="checkbox"
                                       checked={selected}
+                                      disabled={planLoading || !!planError || removeAudioTracks.isPending || !file.edit_capabilities?.remove_audio_tracks}
                                       onChange={() => toggleKeepTrack(file, track.track_index)}
                                       className="w-3.5 h-3.5 text-orange-500 rounded"
                                     />
@@ -416,7 +438,7 @@ export default function FilesPage() {
                                 e.stopPropagation()
                                 handleRemoveAudioTracks(file)
                               }}
-                              disabled={removeAudioTracks.isPending}
+                              disabled={removeAudioTracks.isPending || updateDefaultAudio.isPending || planLoading || !!planError || removalPlan?.last_scanned !== file.last_scanned || !file.edit_capabilities?.remove_audio_tracks}
                               className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white"
                             >
                               <Trash2 className="w-3.5 h-3.5" />

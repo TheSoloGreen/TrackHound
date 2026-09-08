@@ -1,6 +1,8 @@
 """Media API endpoints for querying shows, seasons, and files."""
 
+import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from math import ceil
 from typing import Annotated, Optional, Literal
 
@@ -27,13 +29,16 @@ from app.models.schemas import (
     UpdateDefaultAudioResponse,
     AudioTrackRemovalRequest,
     AudioTrackRemovalResponse,
+    AudioTrackRemovalPlan,
     BulkRescanResponse,
+    MediaEditCapabilities,
 )
 from app.services.exporter import Exporter
 
 router = APIRouter()
 
-from app.core.analyzer import AudioAnalyzer
+from app.core.analyzer import AudioAnalyzer, AudioAnalysisError, require_successful_analysis
+from app.core.media_access import get_media_edit_capabilities
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import (
     AudioTrackRemovalError,
@@ -151,6 +156,7 @@ def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
         has_issues=mf.has_issues,
         issue_details=mf.issue_details,
         audio_tracks=_build_audio_track_responses(mf.audio_tracks),
+        edit_capabilities=get_media_edit_capabilities(mf.file_path),
     )
 
 
@@ -221,7 +227,19 @@ async def _load_user_audio_track_keep_languages(db: AsyncSession, user_id: int) 
 async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_user: User) -> None:
     """Re-analyze one media file and refresh audio track + issue metadata."""
     analyzer = AudioAnalyzer()
-    refreshed_audio = analyzer.analyze(mf.file_path)
+    try:
+        before = Path(mf.file_path).stat()
+        refreshed_audio = require_successful_analysis(
+            await asyncio.to_thread(analyzer.analyze, mf.file_path)
+        )
+        after = Path(mf.file_path).stat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            raise AudioAnalysisError("File changed during analysis. Please rescan it again.")
+    except (AudioAnalysisError, OSError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Analysis could not be refreshed; previous metadata was preserved. {exc}",
+        ) from exc
     refreshed_tracks = refreshed_audio.get("audio_tracks", [])
 
     await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == mf.id))
@@ -245,6 +263,8 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
     mf.container_format = refreshed_audio.get("container")
     mf.duration_ms = refreshed_audio.get("duration_ms")
     mf.last_scanned = datetime.now(timezone.utc)
+    mf.file_size = after.st_size
+    mf.last_modified = datetime.fromtimestamp(after.st_mtime)
 
     audio_preferences = await _load_user_audio_preferences(db, current_user.id)
     preference_engine = PreferenceEngine(audio_preferences)
@@ -257,6 +277,27 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
     await db.refresh(mf, attribute_names=["audio_tracks", "show"])
 
 # ============== Dashboard Stats ==============
+
+
+@router.get("/capabilities", response_model=MediaEditCapabilities)
+async def media_edit_capabilities(
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    """Report instance-level editing capabilities; files may have stricter access."""
+    return get_media_edit_capabilities()
+
+
+def _require_editable_current_file(mf: MediaFile, operation: Literal["default", "remove"]) -> None:
+    capabilities = get_media_edit_capabilities(mf.file_path)
+    reason = capabilities.default_audio_reason if operation == "default" else capabilities.track_removal_reason
+    if reason:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=reason)
+    try:
+        stat = Path(mf.file_path).stat()
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail="The media file is unavailable. Rescan before editing.") from exc
+    if stat.st_size != mf.file_size or datetime.fromtimestamp(stat.st_mtime) != mf.last_modified:
+        raise HTTPException(status_code=409, detail="The file has changed since its last scan. Rescan before editing.")
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -809,22 +850,52 @@ async def update_media_file_default_audio(
     if not mf:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
 
+    _require_editable_current_file(mf, "default")
     target_language = request.language.strip().lower()
     track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
     if not track_dicts:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
 
-    if not set_default_track_by_language(mf.file_path, track_dicts, target_language):
+    if not await asyncio.to_thread(set_default_track_by_language, mf.file_path, track_dicts, target_language):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unable to set default audio track. Ensure the file is MKV, mkvpropedit is installed, and the language exists.",
         )
 
-    await _refresh_media_file_analysis(db, mf, current_user)
+    try:
+        await _refresh_media_file_analysis(db, mf, current_user)
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=f"Default audio was updated, but its metadata could not be refreshed. Rescan before editing again. {exc.detail}",
+        ) from exc
 
     return UpdateDefaultAudioResponse(
         message=f"Default audio updated to '{target_language}'.",
         media_file=_build_media_file_response(mf),
+    )
+
+
+@router.get("/files/{file_id}/audio-tracks/plan", response_model=AudioTrackRemovalPlan)
+async def plan_media_file_audio_tracks(
+    file_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(
+        select(MediaFile).options(selectinload(MediaFile.audio_tracks))
+        .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
+    )
+    mf = result.scalar_one_or_none()
+    if not mf:
+        raise HTTPException(status_code=404, detail="Media file not found")
+    keep_languages = await _load_user_audio_track_keep_languages(db, current_user.id)
+    return AudioTrackRemovalPlan(
+        file_id=mf.id,
+        last_scanned=mf.last_scanned,
+        keep_track_indices=build_keep_audio_track_indices(
+            [_audio_track_to_dict(track) for track in mf.audio_tracks], keep_languages
+        ),
     )
 
 
@@ -852,11 +923,18 @@ async def remove_media_file_audio_tracks(
     if not mf:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
 
+    _require_editable_current_file(mf, "remove")
     track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
     if not track_dicts:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
 
     keep_track_indices = request.keep_track_indices
+    if keep_track_indices is not None:
+        expected = request.expected_last_scanned
+        if expected is not None and expected.tzinfo is not None:
+            expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
+        if expected is None or expected.replace(tzinfo=None) != mf.last_scanned.replace(tzinfo=None):
+            raise HTTPException(status_code=409, detail="The track selection is out of date. Refresh the file and review the tracks again.")
     if keep_track_indices is None:
         keep_languages = request.keep_languages
         if keep_languages is None:
@@ -867,7 +945,8 @@ async def remove_media_file_audio_tracks(
         )
 
     try:
-        removal_result = remove_unwanted_audio_tracks(
+        removal_result = await asyncio.to_thread(
+            remove_unwanted_audio_tracks,
             mf.file_path,
             track_dicts,
             keep_track_indices=keep_track_indices,
@@ -876,7 +955,16 @@ async def remove_media_file_audio_tracks(
     except AudioTrackRemovalError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    await _refresh_media_file_analysis(db, mf, current_user)
+    try:
+        await _refresh_media_file_analysis(db, mf, current_user)
+    except HTTPException as exc:
+        if not removal_result.removed_track_indices:
+            raise
+        backup_note = f" Original backup: {removal_result.backup_path}." if removal_result.backup_path else ""
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=f"Audio tracks were removed, but metadata could not be refreshed. Rescan before editing again.{backup_note} {exc.detail}",
+        ) from exc
 
     return AudioTrackRemovalResponse(
         message="Audio tracks removed." if removal_result.removed_track_indices else "No audio tracks needed removal.",

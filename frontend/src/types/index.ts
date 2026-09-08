@@ -59,6 +59,19 @@ export interface AudioTrack {
 }
 
 // Media types
+export interface MediaEditCapabilities {
+  set_default_audio: boolean
+  remove_audio_tracks: boolean
+  default_audio_reason: string | null
+  track_removal_reason: string | null
+}
+
+export interface AudioTrackRemovalPlan {
+  file_id: number
+  last_scanned: string
+  keep_track_indices: number[]
+}
+
 export interface MediaFile {
   id: number
   file_path: string
@@ -72,6 +85,7 @@ export interface MediaFile {
   has_issues: boolean
   issue_details: string | null
   audio_tracks: AudioTrack[]
+  edit_capabilities?: MediaEditCapabilities
 }
 
 export interface Season {

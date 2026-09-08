@@ -44,6 +44,18 @@ def create_access_token(user_id: int) -> str:
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
+def require_allowed_plex_user(plex_user_id: str) -> None:
+    """Apply instance authorization to new logins and existing sessions."""
+    if plex_user_id not in settings.allowed_plex_user_ids_set:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This Plex account is not approved for this TrackHound instance. "
+                f"Ask the administrator to allow Plex account ID {plex_user_id}."
+            ),
+        )
+
+
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -75,6 +87,7 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
+    require_allowed_plex_user(user.plex_user_id)
     return user
 
 
@@ -175,6 +188,7 @@ async def complete_plex_login(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to get user ID from Plex",
             )
+        require_allowed_plex_user(plex_user_id)
         plex_username = plex_user.get("username", plex_user.get("title", "Unknown"))
         plex_email = plex_user.get("email")
         plex_thumb = plex_user.get("thumb")

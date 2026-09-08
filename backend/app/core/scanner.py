@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session_maker
 from app.models.entities import MediaFile, Show, Season, ScanLocation, UserPreference
-from app.core.analyzer import AudioAnalyzer
+from app.core.analyzer import AudioAnalyzer, require_successful_analysis
+from app.core.media_access import get_media_edit_capabilities
 from app.core.plex_connector import PlexConnector
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import set_default_track_by_index
@@ -144,6 +145,9 @@ class MediaScanner:
         if is_anime or not audio_tracks:
             return audio_info
 
+        if not get_media_edit_capabilities(file_path).set_default_audio:
+            return audio_info
+
         english_index = self._get_english_default_fix_index(audio_tracks)
         if english_index is None:
             return audio_info
@@ -165,6 +169,8 @@ class MediaScanner:
 
         for root, _, filenames in os.walk(location_path):
             for filename in filenames:
+                if filename.startswith(".trackhound-"):
+                    continue
                 ext = Path(filename).suffix.lower()
                 if ext in self.extensions:
                     files.append(os.path.join(root, filename))
@@ -202,7 +208,7 @@ class MediaScanner:
                 return existing
 
             # Analyze audio tracks
-            audio_info = self.analyzer.analyze(file_path)
+            audio_info = require_successful_analysis(self.analyzer.analyze(file_path))
 
             # Determine title and metadata based on media type
             if is_movie:
@@ -236,10 +242,10 @@ class MediaScanner:
                 thumb_url = None
 
             # Automatically fix default audio for non-anime content when possible
-            audio_info = self._auto_fix_default_track(
-                file_path=file_path,
-                audio_info=audio_info,
-                is_anime=is_anime,
+            audio_info = require_successful_analysis(
+                self._auto_fix_default_track(
+                    file_path=file_path, audio_info=audio_info, is_anime=is_anime,
+                )
             )
 
             # Find or create show
