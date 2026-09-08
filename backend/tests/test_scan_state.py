@@ -61,6 +61,21 @@ class ScanStateManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.manager.is_cancel_requested(user_id=1))
         self.assertFalse(await self.manager.is_cancel_requested(user_id=2))
 
+    async def test_completion_keeps_bounded_errors_and_total_count(self) -> None:
+        await self.manager.start_scan(user_id=1)
+        for index in range(60):
+            await self.manager.append_error(1, f"File {index} failed")
+        completed = await self.manager.finish_scan(1)
+        self.assertEqual(completed.outcome, "completed_with_errors")
+        self.assertEqual(completed.error_count, 60)
+        self.assertEqual(len(completed.errors), 50)
+        self.assertIsNotNone(completed.finished_at)
+        self.assertEqual((await self.manager.get_status(1)).errors, completed.errors)
+        restarted = await self.manager.start_scan(1)
+        self.assertEqual(restarted.error_count, 0)
+        self.assertEqual(restarted.errors, [])
+        self.assertIsNone(restarted.finished_at)
+
 
 if __name__ == "__main__":
     unittest.main()

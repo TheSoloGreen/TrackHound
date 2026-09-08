@@ -34,6 +34,7 @@ class ScanStateManager:
             self._cancel_requested_by_user[user_id] = False
             self._status_by_user[user_id] = ScanStatus(
                 is_running=True,
+                outcome="running",
                 current_location=None,
                 files_scanned=0,
                 files_total=0,
@@ -70,13 +71,27 @@ class ScanStateManager:
         """Append an error message to scan status."""
         async with self._lock:
             status = self._get_or_create_status(user_id)
-            status.errors.append(error)
+            status.error_count += 1
+            if len(status.errors) < 50:
+                status.errors.append(error)
             return status.model_copy(deep=True)
 
-    async def finish_scan(self, user_id: int) -> ScanStatus:
+    async def append_warning(self, user_id: int, warning: str) -> ScanStatus:
+        async with self._lock:
+            status = self._get_or_create_status(user_id)
+            status.warning_count += 1
+            if len(status.warnings) < 50:
+                status.warnings.append(warning)
+            return status.model_copy(deep=True)
+
+    async def finish_scan(self, user_id: int, *, failed: bool = False) -> ScanStatus:
         """Transition to not running while keeping progress context."""
         async with self._lock:
             status = self._get_or_create_status(user_id)
+            cancelled = self._cancel_requested_by_user.get(user_id, False)
+            status.outcome = ("failed" if failed else "cancelled" if cancelled else
+                              "completed_with_errors" if status.error_count or status.warning_count else "completed")
+            status.finished_at = datetime.now(timezone.utc)
             self._cancel_requested_by_user[user_id] = False
             status.is_running = False
             status.current_location = None

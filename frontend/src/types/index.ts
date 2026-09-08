@@ -103,6 +103,7 @@ export interface Show {
   id: number
   title: string
   media_type: MediaType
+  base_media_type: 'tv' | 'movie'
   is_anime: boolean
   anime_source: string | null
   thumb_url: string | null

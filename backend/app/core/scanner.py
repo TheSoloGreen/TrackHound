@@ -1,23 +1,27 @@
 """Media file scanner for discovering and processing media files."""
 
+import asyncio
 import logging
+import stat as stat_module
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import async_session_maker
-from app.models.entities import MediaFile, Show, Season, ScanLocation, UserPreference
+from app.models.entities import MediaFile, Show, Season, ScanLocation, AudioTrack
 from app.core.analyzer import AudioAnalyzer, require_successful_analysis
 from app.core.media_access import get_media_edit_capabilities
 from app.core.plex_connector import PlexConnector
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import set_default_track_by_index
-from app.models.schemas import AudioPreferences as AudioPreferencesSchema
+from app.models.schemas import AnimeDetectionSettings, normalize_file_extensions
+from app.core.user_settings import load_user_settings
+from app.core.classification import classify_show
 from app.core.scan_state import scan_state_manager
 
 logger = logging.getLogger(__name__)
@@ -101,18 +105,15 @@ def parse_movie_title(file_path: str, base_path: str) -> str:
 
 
 class MediaScanner:
-    """Scanner for discovering media files in configured locations."""
+    """Scan one user's library using a snapshot of their saved preferences."""
 
-    def __init__(
-        self,
-        extensions: set[str] = None,
-        plex_token: Optional[str] = None,
-        audio_preferences: Optional[AudioPreferences] = None,
-    ):
-        self.extensions = extensions or DEFAULT_EXTENSIONS
+    def __init__(self, extensions=None, plex_token=None, audio_preferences=None, anime_detection=None):
+        self.extensions = set(normalize_file_extensions(list(extensions))) if extensions is not None else DEFAULT_EXTENSIONS
         self.analyzer = AudioAnalyzer()
         self.plex_connector = PlexConnector(plex_token) if plex_token else None
+        self.plex_failed = False
         self.preference_engine = PreferenceEngine(audio_preferences)
+        self.anime_detection = anime_detection or AnimeDetectionSettings()
 
     def _get_english_default_fix_index(self, audio_tracks: list[dict]) -> Optional[int]:
         """Return the English track index to promote as default, if needed."""
@@ -160,362 +161,232 @@ class MediaScanner:
         return audio_info
 
     def discover_files(self, location: str) -> list[str]:
-        """Discover all media files in a location."""
+        """Fail the location on unreadable directories instead of returning a partial list."""
+        root_path = Path(location).resolve(strict=True)
+        if not root_path.is_dir():
+            raise ValueError(f"Location is not a directory: {location}")
         files = []
-        location_path = Path(location)
 
-        if not location_path.exists():
-            raise ValueError(f"Location does not exist: {location}")
+        def fail(error):
+            raise error
 
-        for root, _, filenames in os.walk(location_path):
-            for filename in filenames:
-                if filename.startswith(".trackhound-"):
+        for root, _, names in os.walk(root_path, onerror=fail):
+            for name in names:
+                if name.startswith(".trackhound-") or Path(name).suffix.lower() not in self.extensions:
                     continue
-                ext = Path(filename).suffix.lower()
-                if ext in self.extensions:
-                    files.append(os.path.join(root, filename))
-
+                path = Path(root) / name
+                resolved = path.resolve(strict=True)
+                if resolved.is_relative_to(root_path) and resolved.is_file():
+                    files.append(str(path))
         return sorted(files)
 
-    async def process_file(
-        self,
-        file_path: str,
-        base_path: str,
-        media_type: str,
-        user_id: int,
-        db: AsyncSession,
-    ) -> Optional[MediaFile]:
-        """Process a single media file."""
+    async def process_file(self, file_path, base_path, media_type, user_id, db, *, incremental=True):
+        """Roll back only the current file when a probe or database write fails."""
         try:
             async with db.begin_nested():
-                return await self._process_file(file_path, base_path, media_type, user_id, db)
-        except Exception as e:
-            logger.error("Error processing file %s: %s", file_path, e)
-            await scan_state_manager.append_error(user_id, f"{file_path}: {str(e)}")
+                return await self._process_file(file_path, base_path, media_type, user_id, db, incremental)
+        except Exception as error:
+            logger.error("Error processing file %s: %s", file_path, error)
+            await scan_state_manager.append_error(user_id, f"{file_path}: {error}")
             return None
 
-    async def _process_file(self, file_path, base_path, media_type, user_id, db):
-        is_movie = media_type == "movie"
-        is_anime = media_type == "anime"
-
-        # Check if file already exists in database
-        result = await db.execute(
-            select(MediaFile).where(
-                MediaFile.file_path == file_path,
-                MediaFile.user_id == user_id,
-            )
-        )
-        existing = result.scalar_one_or_none()
-
-        # Get file stats
-        stat = os.stat(file_path)
-        file_mtime = datetime.fromtimestamp(stat.st_mtime)
-
-        # Skip if file hasn't changed (incremental scan)
-        if existing and existing.last_modified >= file_mtime:
+    async def _process_file(self, file_path, base_path, media_type, user_id, db, incremental):
+        existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
+        before = await asyncio.to_thread(os.stat, file_path)
+        modified = datetime.fromtimestamp(before.st_mtime)
+        if incremental and existing and existing.last_modified == modified and existing.file_size == before.st_size:
             return existing
 
-        # Analyze audio tracks
-        audio_info = require_successful_analysis(self.analyzer.analyze(file_path))
+        audio = require_successful_analysis(await asyncio.to_thread(self.analyzer.analyze, file_path))
+        after = await asyncio.to_thread(os.stat, file_path)
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("File changed during analysis; retry the scan when external writes finish.")
 
-        # Determine title and metadata based on media type
-        if is_movie:
-            show_title = parse_movie_title(file_path, base_path)
-            show_info = {"show": show_title, "season": None, "episode": None}
-        else:
-            show_info = parse_show_info(file_path, base_path)
-            show_title = show_info.get("show")
-
-        # Try to get metadata from Plex first
-        plex_metadata = None
+        base_type = "movie" if media_type == "movie" else "tv"
+        info = ({"show": parse_movie_title(file_path, base_path), "season": None, "episode": None}
+                if base_type == "movie" else parse_show_info(file_path, base_path))
+        metadata = None
         if self.plex_connector:
-            plex_metadata = self.plex_connector.sync_show_metadata(
-                file_path=file_path,
-                title_from_path=show_title,
-            )
+            try:
+                metadata = await asyncio.to_thread(self.plex_connector.sync_show_metadata, file_path=file_path, title_from_path=info["show"])
+            except Exception as error:
+                logger.warning("Plex enrichment disabled for this scan (%s)", type(error).__name__)
+                self.plex_connector = None
+                self.plex_failed = True
+                await scan_state_manager.append_warning(user_id, "Plex metadata is unavailable. Local scanning continues; check Plex server access or sign in again before the next scan.")
 
-        # Determine final title and anime status
-        if plex_metadata:
-            show_title = plex_metadata["title"]
-            plex_is_anime = plex_metadata["is_anime"]
-            anime_source = "plex_genre" if plex_is_anime else None
-            plex_rating_key = plex_metadata.get("plex_rating_key")
-            thumb_url = plex_metadata.get("thumb_url")
-            # If Plex says it's anime and we're in a TV folder, upgrade to anime
-            if plex_is_anime and media_type == "tv":
-                is_anime = True
-        else:
-            anime_source = "folder" if is_anime else None
-            plex_rating_key = None
-            thumb_url = None
+        title = metadata.get("title") if metadata else info["show"]
+        rating_key = metadata.get("plex_rating_key") if metadata else None
+        show = await db.scalar(select(Show).where(Show.id == existing.show_id, Show.user_id == user_id)) if existing and existing.show_id else None
+        if not show and rating_key:
+            show = await db.scalar(select(Show).where(Show.plex_rating_key == rating_key, Show.user_id == user_id).order_by(Show.id).limit(1))
+        if not show and title:
+            show = await db.scalar(select(Show).where(Show.user_id == user_id, Show.title.in_([title, info["show"]]),
+                                                     Show.base_media_type == base_type).order_by(Show.id).limit(1))
 
-        # Automatically fix default audio for non-anime content when possible
-        audio_info = require_successful_analysis(
-            self._auto_fix_default_track(
-                file_path=file_path, audio_info=audio_info, is_anime=is_anime,
-            )
-        )
+        # An anime location forces anime; other locations allow automatic hints.
+        # Manual positive and negative overrides win, including before auto-fix.
+        folder_hint = any(keyword in str(Path(file_path).parent).lower() for keyword in self.anime_detection.anime_folder_keywords)
+        plex_hint = bool(self.anime_detection.use_plex_genres and metadata and metadata.get("is_anime"))
+        is_anime = media_type == "anime" or folder_hint or plex_hint
+        source = "location" if media_type == "anime" else "folder" if folder_hint else "plex_genre" if plex_hint else None
+        if show and show.anime_source == "manual":
+            is_anime, source, base_type = show.is_anime, "manual", show.base_media_type
+        elif show and self.plex_failed and self.anime_detection.use_plex_genres and show.anime_source == "plex_genre" and not is_anime:
+            is_anime, source = show.is_anime, "plex_genre"
 
-        # Find or create show
-        show = None
+        if title and not show:
+            show = Show(user_id=user_id, title=title)
+            db.add(show)
+        if show:
+            classify_show(show, is_anime, source, base_type)
+            if metadata:
+                show.title = title
+                show.plex_rating_key = rating_key
+                show.thumb_url = metadata.get("thumb_url")
+            await db.flush()
+
+        audio = require_successful_analysis(await asyncio.to_thread(self._auto_fix_default_track, file_path, audio, is_anime))
+        after = await asyncio.to_thread(os.stat, file_path)
         season = None
-
-        if show_title:
-            # First try to find by Plex rating key
-            if plex_rating_key:
-                result = await db.execute(
-                    select(Show).where(
-                        Show.plex_rating_key == plex_rating_key,
-                        Show.user_id == user_id,
-                    )
-                )
-                show = result.scalar_one_or_none()
-
-            # Then try by title
-            if not show:
-                result = await db.execute(
-                    select(Show).where(
-                        Show.title == show_title, Show.user_id == user_id
-                    )
-                )
-                show = result.scalar_one_or_none()
-
-            # Check path-based title (handles English folder names)
-            if (
-                not show
-                and show_info.get("show")
-                and show_info["show"] != show_title
-            ):
-                result = await db.execute(
-                    select(Show).where(
-                        Show.title == show_info["show"], Show.user_id == user_id
-                    )
-                )
-                existing_show = result.scalar_one_or_none()
-                if existing_show:
-                    show = existing_show
-                    if plex_metadata:
-                        show.title = show_title
-                        show.plex_rating_key = plex_rating_key
-                        show.is_anime = is_anime
-                        show.anime_source = anime_source
-                        show.thumb_url = thumb_url
-
-            if not show:
-                show = Show(
-                    user_id=user_id,
-                    title=show_title,
-                    media_type=media_type,
-                    plex_rating_key=plex_rating_key,
-                    is_anime=is_anime,
-                    anime_source=anime_source,
-                    thumb_url=thumb_url,
-                )
-                db.add(show)
+        if show and base_type != "movie" and info.get("season") is not None:
+            season = await db.scalar(select(Season).where(Season.show_id == show.id, Season.season_number == info["season"]).order_by(Season.id).limit(1))
+            if not season:
+                season = Season(show_id=show.id, season_number=info["season"])
+                db.add(season)
                 await db.flush()
-            elif plex_metadata and not show.plex_rating_key:
-                show.plex_rating_key = plex_rating_key
-                show.is_anime = is_anime
-                show.anime_source = anime_source
-                if thumb_url:
-                    show.thumb_url = thumb_url
 
-            # Find or create season (TV/anime only)
-            if not is_movie and show_info.get("season"):
-                result = await db.execute(
-                    select(Season).where(
-                        Season.show_id == show.id,
-                        Season.season_number == show_info["season"],
-                    )
-                )
-                season = result.scalar_one_or_none()
-
-                if not season:
-                    season = Season(
-                        show_id=show.id,
-                        season_number=show_info["season"],
-                    )
-                    db.add(season)
-                    await db.flush()
-
-        # Create or update media file
+        media_file = existing or MediaFile(user_id=user_id, file_path=file_path)
         if existing:
-            media_file = existing
-            from app.models.entities import AudioTrack
-            from sqlalchemy import delete
-
-            await db.execute(
-                delete(AudioTrack).where(AudioTrack.media_file_id == media_file.id)
-            )
+            await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == existing.id))
         else:
-            media_file = MediaFile(user_id=user_id, file_path=file_path)
             db.add(media_file)
-
-        # Update media file info
-        media_file.filename = os.path.basename(file_path)
+        media_file.filename = Path(file_path).name
         media_file.show_id = show.id if show else None
         media_file.season_id = season.id if season else None
-        media_file.episode_number = (
-            show_info.get("episode") if not is_movie else None
-        )
-        media_file.file_size = stat.st_size
-        media_file.container_format = audio_info.get("container")
-        media_file.duration_ms = audio_info.get("duration_ms")
+        media_file.episode_number = info.get("episode") if base_type != "movie" else None
+        media_file.file_size = after.st_size
+        media_file.container_format = audio.get("container")
+        media_file.duration_ms = audio.get("duration_ms")
         media_file.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
-        media_file.last_modified = file_mtime
-
-        await db.flush()
-
-        # Add audio tracks
-        from app.models.entities import AudioTrack
-
-        for track_info in audio_info.get("audio_tracks", []):
-            track = AudioTrack(
-                media_file_id=media_file.id,
-                track_index=track_info.get("index", 0),
-                language=track_info.get("language"),
-                language_raw=track_info.get("language_raw"),
-                codec=track_info.get("codec"),
-                channels=track_info.get("channels"),
-                channel_layout=track_info.get("channel_layout"),
-                bitrate=track_info.get("bitrate"),
-                is_default=track_info.get("is_default", False),
-                is_forced=track_info.get("is_forced", False),
-                title=track_info.get("title"),
-            )
-            db.add(track)
-
-        await db.flush()
-
-        # Evaluate preferences and set issues
-        final_is_anime = show.is_anime if show else is_anime
-        issues = self.preference_engine.evaluate(
-            audio_info.get("audio_tracks", []),
-            is_anime=final_is_anime,
-        )
-
-        media_file.has_issues = len(issues) > 0
+        media_file.last_modified = datetime.fromtimestamp(after.st_mtime)
+        issues = self.preference_engine.evaluate(audio.get("audio_tracks", []), is_anime=is_anime)
+        media_file.has_issues = bool(issues)
         media_file.issue_details = "; ".join(issues) if issues else None
-
+        await db.flush()
+        for track in audio.get("audio_tracks", []):
+            db.add(AudioTrack(
+                media_file_id=media_file.id, track_index=track.get("index", 0),
+                is_default=track.get("is_default", False), is_forced=track.get("is_forced", False),
+                **{key: track.get(key) for key in ("language", "language_raw", "codec", "channels", "channel_layout", "bitrate", "title")},
+            ))
+        await db.flush()
         return media_file
 
 
+def _root_identity(root):
+    value = os.stat(root)
+    if not stat_module.S_ISDIR(value.st_mode):
+        raise ValueError(f"Scan location is not a directory: {root}")
+    return value.st_dev, value.st_ino
 
-async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioPreferences:
-    """Load per-user audio preferences with safe defaults."""
-    result = await db.execute(
-        select(UserPreference).where(
-            UserPreference.user_id == user_id,
-            UserPreference.key == "audio_preferences",
-        )
-    )
-    pref = result.scalar_one_or_none()
-    if not pref or not pref.value:
-        return AudioPreferences()
 
+def _missing_paths(rows, roots):
+    """Only remove genuinely missing paths; ignored extensions remain indexed."""
+    for root, identity in roots.items():
+        if _root_identity(root) != identity:
+            raise ValueError(f"Location changed or was unmounted during scanning: {root}")
+    missing = []
+    for row in rows:
+        try:
+            os.stat(row.file_path)
+        except FileNotFoundError:
+            missing.append(row.id)
+        # Permission and other I/O errors abort cleanup, rather than implying deletion.
+    return missing
+
+
+async def _reconcile_missing_files(db, user_id, discovered, roots):
+    if not roots:
+        return 0
+    scope = or_(*(MediaFile.file_path.startswith(root.rstrip("/") + "/", autoescape=True) for root in roots))
+    rows = (await db.execute(select(MediaFile.id, MediaFile.file_path).where(MediaFile.user_id == user_id, scope))).all()
+    missing = await asyncio.to_thread(_missing_paths, [row for row in rows if row.file_path not in discovered], roots)
+    for start in range(0, len(missing), 500):
+        await db.execute(delete(MediaFile).where(MediaFile.user_id == user_id, MediaFile.id.in_(missing[start:start + 500])))
+    await db.execute(delete(Season).where(Season.show_id.in_(select(Show.id).where(Show.user_id == user_id)),
+                                         ~select(MediaFile.id).where(MediaFile.season_id == Season.id).exists()))
+    await db.execute(delete(Show).where(Show.user_id == user_id,
+                                       ~select(MediaFile.id).where(MediaFile.show_id == Show.id).exists(),
+                                       ~select(Season.id).where(Season.show_id == Show.id).exists()))
+    return len(missing)
+
+
+async def run_scan(locations, location_media_types, user_id, incremental=True, user_plex_token=None, plex_warning=None):
+    """Persist valid files, but reconcile only a complete, uncancelled local scan."""
+    await scan_state_manager.update_status(user_id, is_running=True, outcome="running", files_scanned=0,
+        files_total=0, files_removed=0, current_file=None, started_at=datetime.now(timezone.utc), finished_at=None,
+        errors=[], warnings=[], error_count=0, warning_count=0)
+    failed = False
     try:
-        parsed = AudioPreferencesSchema.model_validate_json(pref.value)
-    except Exception:
-        return AudioPreferences()
-
-    return AudioPreferences(
-        require_english_non_anime=parsed.require_english_non_anime,
-        require_japanese_anime=parsed.require_japanese_anime,
-        require_dual_audio_anime=parsed.require_dual_audio_anime,
-        check_default_track=parsed.check_default_track,
-        preferred_codecs=parsed.preferred_codecs,
-        auto_fix_english_default_non_anime=parsed.auto_fix_english_default_non_anime,
-    )
-
-
-async def run_scan(
-    locations: list[str],
-    location_media_types: dict[str, str],
-    user_id: int,
-    incremental: bool = True,
-    user_plex_token: Optional[str] = None,
-) -> None:
-    """Run a scan on the specified locations."""
-    await scan_state_manager.update_status(
-        user_id,
-        is_running=True,
-        files_scanned=0,
-        files_total=0,
-        current_file=None,
-        started_at=datetime.now(timezone.utc),
-        errors=[],
-    )
-
-    scanner = MediaScanner(plex_token=user_plex_token)
-
-    try:
-        # Discover all files first
-        all_files = []
-        for location in locations:
-            await scan_state_manager.update_status(user_id, current_location=location)
-            try:
-                files = scanner.discover_files(location)
-                media_type = location_media_types.get(location, "tv")
-                all_files.extend([(f, location, media_type) for f in files])
-            except Exception as e:
-                logger.error("Error discovering files in %s: %s", location, e)
-                await scan_state_manager.append_error(
-                    user_id, f"Error scanning {location}: {str(e)}"
-                )
-
-        await scan_state_manager.update_status(user_id, files_total=len(all_files))
-
-        # Process files
+        if plex_warning:
+            await scan_state_manager.append_warning(user_id, plex_warning)
         async with async_session_maker() as db:
-            audio_preferences = await _load_user_audio_preferences(db, user_id)
-            scanner = MediaScanner(
-                plex_token=user_plex_token,
-                audio_preferences=audio_preferences,
-            )
-
-            for i, (file_path, base_path, media_type) in enumerate(all_files):
+            settings = await load_user_settings(db, user_id)
+            preferences = AudioPreferences(**settings.audio_preferences.model_dump(exclude={"audio_track_keep_languages"}))
+            scanner = MediaScanner(settings.file_extensions, user_plex_token, preferences, settings.anime_detection)
+            scanner.plex_failed = bool(plex_warning)
+            configured = (await db.scalars(select(ScanLocation).where(ScanLocation.user_id == user_id, ScanLocation.enabled == True))).all()
+            types = {location.path: location.media_type for location in configured}
+            types.update(location_media_types)
+            all_files, roots, complete = set(), {}, True
+            for location in locations:
                 if await scan_state_manager.is_cancel_requested(user_id):
                     break
-
-                await scan_state_manager.update_status(
-                    user_id,
-                    files_scanned=i + 1,
-                    current_file=os.path.basename(file_path),
-                )
-
-                await scanner.process_file(
-                    file_path, base_path, media_type, user_id, db
-                )
-
-                # Commit periodically
-                if (i + 1) % 50 == 0:
-                    await db.commit()
-
-            await db.commit()
-
-            # Update scan location stats
-            for location in locations:
-                result = await db.execute(
-                    select(ScanLocation).where(
-                        ScanLocation.path == location,
-                        ScanLocation.user_id == user_id,
-                    )
-                )
-                scan_loc = result.scalar_one_or_none()
-                if scan_loc:
-                    scan_loc.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
-                    file_count = (
-                        await db.scalar(
-                            select(func.count(MediaFile.id)).where(
-                                MediaFile.file_path.like(f"{location}%"),
-                                MediaFile.user_id == user_id,
-                            )
-                        )
-                        or 0
-                    )
-                    scan_loc.file_count = file_count
-
-            await db.commit()
-
+                await scan_state_manager.update_status(user_id, current_location=location)
+                try:
+                    identity = await asyncio.to_thread(_root_identity, location)
+                    found = await asyncio.to_thread(scanner.discover_files, location)
+                    all_files.update(found)
+                    roots[location] = identity
+                except Exception as error:
+                    complete = False
+                    await scan_state_manager.append_error(user_id, f"Cannot fully read {location}: {error}")
+            await scan_state_manager.update_status(user_id, files_total=len(all_files))
+            if not roots and not await scan_state_manager.is_cancel_requested(user_id):
+                raise ValueError("No scan location could be read completely.")
+            for index, file_path in enumerate(sorted(all_files)):
+                if await scan_state_manager.is_cancel_requested(user_id):
+                    break
+                # The deepest configured enabled root determines classification,
+                # even when the user starts a scan from an overlapping parent.
+                candidates = [root for root in types if Path(file_path).is_relative_to(root)]
+                base_path = max(candidates, key=lambda root: len(Path(root).parts))
+                await scan_state_manager.update_status(user_id, current_location=base_path, current_file=Path(file_path).name)
+                result = await scanner.process_file(file_path, base_path, types[base_path], user_id, db, incremental=incremental)
+                complete = complete and result is not None
+                await db.commit()
+                await scan_state_manager.update_status(user_id, files_scanned=index + 1)
+            reconciled = complete and len(roots) == len(locations) and not await scan_state_manager.is_cancel_requested(user_id)
+            removed = await _reconcile_missing_files(db, user_id, all_files, roots) if reconciled else 0
+            # Counts reflect the rows that were actually saved, even after a partial scan.
+            current_locations = (await db.scalars(select(ScanLocation).where(ScanLocation.user_id == user_id))).all()
+            for location in current_locations:
+                location.file_count = await db.scalar(select(func.count(MediaFile.id)).where(MediaFile.user_id == user_id,
+                    MediaFile.file_path.startswith(location.path.rstrip("/") + "/", autoescape=True))) or 0
+                if reconciled and location.path in roots:
+                    location.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
+            if reconciled and await scan_state_manager.is_cancel_requested(user_id):
+                await db.rollback()
+            else:
+                await db.commit()
+                await scan_state_manager.update_status(user_id, files_removed=removed)
+    except asyncio.CancelledError:
+        failed = True
+        raise
+    except Exception as error:
+        failed = True
+        logger.error("Scan failed for user %s: %s", user_id, error)
+        await scan_state_manager.append_error(user_id, f"Scan failed: {error}")
     finally:
-        await scan_state_manager.finish_scan(user_id)
+        await scan_state_manager.finish_scan(user_id, failed=failed)

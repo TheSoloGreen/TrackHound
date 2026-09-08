@@ -343,6 +343,14 @@ async def start_scan(
     # Import here to avoid circular imports
     from app.core.scanner import run_scan
 
+    # An unreadable saved Plex token must not prevent local filesystem scanning.
+    plex_warning = None
+    try:
+        plex_token = decrypt_value(current_user.plex_token)
+    except ValueError:
+        plex_token = None
+        plex_warning = "Stored Plex credentials are unavailable. Local scanning continues; sign in again to reconnect Plex."
+
     # Start scan in background
     background_tasks.add_task(
         run_scan,
@@ -350,7 +358,8 @@ async def start_scan(
         location_media_types={loc.path: loc.media_type for loc in locations},
         incremental=request.incremental,
         user_id=current_user.id,
-        user_plex_token=decrypt_value(current_user.plex_token),
+        user_plex_token=plex_token,
+        plex_warning=plex_warning,
     )
 
     return started_status

@@ -87,7 +87,7 @@ async def seed_legacy(engine, version):
 
 async def assert_upgraded(engine):
     async with engine.connect() as connection:
-        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0002_ownership_constraints"
+        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003_classification"
         diffs = await connection.run_sync(lambda sync: compare_metadata(MigrationContext.configure(sync), Base.metadata))
         assert diffs == []
         if connection.dialect.name == "sqlite":
@@ -116,6 +116,22 @@ async def test_historical_upgrade_preserves_rows_and_matches_models(database, ve
 async def test_fresh_upgrade_matches_models(database):
     await upgrade_database(database)
     await assert_upgraded(database)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("media_type,is_anime,expected_base,expected_type", [
+    ("movie", True, "movie", "anime"),
+    ("anime", False, "tv", "tv"),
+])
+async def test_classification_upgrade_preserves_movie_origin_and_manual_unmark(database, media_type, is_anime, expected_base, expected_type):
+    await seed_legacy(database, "current")
+    async with database.begin() as connection:
+        await connection.execute(text("UPDATE shows SET media_type=:media_type, is_anime=:is_anime, anime_source=:source"),
+                                 {"media_type": media_type, "is_anime": is_anime, "source": "manual" if is_anime else "folder"})
+    await upgrade_database(database)
+    async with database.connect() as connection:
+        row = (await connection.execute(text("SELECT base_media_type, media_type, is_anime, anime_source FROM shows"))).one()
+        assert tuple(row) == (expected_base, expected_type, is_anime, "manual")
 
 
 @pytest.mark.asyncio

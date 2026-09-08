@@ -3,9 +3,10 @@
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+import re
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 MEDIA_ROOT = Path("/media").resolve()
@@ -140,6 +141,12 @@ class ScanStatus(BaseModel):
     current_file: Optional[str] = None
     started_at: Optional[datetime] = None
     errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error_count: int = 0
+    warning_count: int = 0
+    files_removed: int = 0
+    finished_at: Optional[datetime] = None
+    outcome: Literal["idle", "running", "completed", "completed_with_errors", "cancelled", "failed"] = "idle"
 
 
 class ScanStartRequest(BaseModel):
@@ -243,6 +250,7 @@ class ShowResponse(BaseModel):
     id: int
     title: str
     media_type: str = "tv"
+    base_media_type: str = "tv"
     is_anime: bool
     anime_source: Optional[str] = None
     thumb_url: Optional[str] = None
@@ -264,9 +272,16 @@ class ShowDetailResponse(ShowResponse):
 class ShowUpdate(BaseModel):
     """Update show properties."""
 
-    media_type: Optional[str] = None
+    media_type: Optional[ScanMediaType] = None
     is_anime: Optional[bool] = None
-    anime_source: Optional[str] = None
+    anime_source: Optional[Literal["manual"]] = None
+
+    @model_validator(mode="after")
+    def consistent_classification(self):
+        if self.media_type is not None and self.is_anime is not None:
+            if self.is_anime != (self.media_type == ScanMediaType.ANIME):
+                raise ValueError("media_type and is_anime describe conflicting classifications")
+        return self
 
 
 class ShowListResponse(BaseModel):
@@ -300,6 +315,26 @@ class AnimeDetectionSettings(BaseModel):
     use_plex_genres: bool = True
     anime_folder_keywords: list[str] = ["anime", "animation"]
 
+    @field_validator("anime_folder_keywords")
+    @classmethod
+    def normalize_keywords(cls, keywords):
+        return list(dict.fromkeys(keyword.strip().lower() for keyword in keywords if keyword.strip()))
+
+
+def normalize_file_extensions(extensions):
+    if not isinstance(extensions, list) or not extensions:
+        raise ValueError("Choose at least one file extension")
+    normalized = []
+    for extension in extensions:
+        if not isinstance(extension, str):
+            raise ValueError("File extensions must be text")
+        extension = "." + extension.strip().lower().lstrip(".")
+        if not re.fullmatch(r"\.[a-z0-9]{1,10}", extension):
+            raise ValueError("Use file extensions such as .mkv or .mp4, without paths or wildcards")
+        if extension not in normalized:
+            normalized.append(extension)
+    return normalized
+
 
 class UserSettingsResponse(BaseModel):
     """User settings response."""
@@ -308,6 +343,8 @@ class UserSettingsResponse(BaseModel):
     anime_detection: AnimeDetectionSettings
     file_extensions: list[str] = [".mkv", ".mp4", ".avi", ".m4v"]
 
+    _normalize_extensions = field_validator("file_extensions")(normalize_file_extensions)
+
 
 class UserSettingsUpdate(BaseModel):
     """Update user settings."""
@@ -315,6 +352,11 @@ class UserSettingsUpdate(BaseModel):
     audio_preferences: Optional[AudioPreferences] = None
     anime_detection: Optional[AnimeDetectionSettings] = None
     file_extensions: Optional[list[str]] = None
+
+    @field_validator("file_extensions")
+    @classmethod
+    def validate_extensions(cls, extensions):
+        return normalize_file_extensions(extensions) if extensions is not None else None
 
 
 class UpdateDefaultAudioRequest(BaseModel):
