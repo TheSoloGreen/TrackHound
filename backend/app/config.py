@@ -5,6 +5,7 @@ import warnings
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ class Settings(BaseSettings):
     encryption_key: str = _INSECURE_DEFAULT_ENCRYPTION_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7  # 1 week
+    allowed_plex_user_ids: str = ""
+    media_writes_enabled: bool = False
 
     # Plex OAuth
     plex_client_identifier: str = "trackhound"
@@ -54,29 +57,42 @@ class Settings(BaseSettings):
 
     def validate_secret_key(self) -> None:
         """Warn or raise if the secret key is insecure."""
-        if self.secret_key == _INSECURE_DEFAULT_KEY:
+        if self.secret_key == _INSECURE_DEFAULT_KEY or len(self.secret_key.strip()) < 32:
             if self.environment == "production":
                 raise ValueError(
-                    "SECRET_KEY must be set to a secure value in production. "
+                    "SECRET_KEY must be a non-default value of at least 32 characters in production. "
                     "Generate one with: openssl rand -hex 32"
                 )
             warnings.warn(
-                "Using default SECRET_KEY — set a secure value before deploying. "
+                "Using default or short SECRET_KEY — set a secure value before deploying. "
                 "Generate one with: openssl rand -hex 32",
                 stacklevel=2,
             )
 
-        if self.encryption_key == _INSECURE_DEFAULT_ENCRYPTION_KEY:
+        if self.encryption_key == _INSECURE_DEFAULT_ENCRYPTION_KEY or len(self.encryption_key.strip()) < 32:
             if self.environment == "production":
                 raise ValueError(
-                    "ENCRYPTION_KEY must be set to a secure value in production. "
+                    "ENCRYPTION_KEY must be a non-default value of at least 32 characters in production. "
                     "Generate one with: openssl rand -base64 32"
                 )
             warnings.warn(
-                "Using default ENCRYPTION_KEY — set a secure value before deploying. "
+                "Using default or short ENCRYPTION_KEY — set a secure value before deploying. "
                 "Generate one with: openssl rand -base64 32",
                 stacklevel=2,
             )
+
+    @field_validator("allowed_plex_user_ids")
+    @classmethod
+    def validate_allowed_plex_user_ids(cls, value: str) -> str:
+        ids = [item.strip() for item in value.split(",") if item.strip()]
+        if any(not item.isascii() or not item.isdecimal() or int(item) <= 0 for item in ids):
+            raise ValueError("ALLOWED_PLEX_USER_IDS must contain comma-separated positive numeric Plex account IDs")
+        return ",".join(dict.fromkeys(str(int(item)) for item in ids))
+
+    @property
+    def allowed_plex_user_ids_set(self) -> set[str]:
+        """An empty allowlist deliberately grants no account access."""
+        return set(filter(None, self.allowed_plex_user_ids.split(",")))
 
     @property
     def cors_origins_list(self) -> list[str]:

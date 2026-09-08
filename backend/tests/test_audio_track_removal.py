@@ -53,12 +53,14 @@ def test_remove_unwanted_audio_tracks_uses_mkvmerge_track_ids_and_keeps_backup(t
         ]
     }
 
-    def fake_run(command, check, capture_output, text):
+    def fake_run(command, check, capture_output, text, timeout):
         if command[:2] == ["mkvmerge", "-J"]:
             class Result:
-                stdout = __import__("json").dumps(mkvmerge_probe)
+                stdout = __import__("json").dumps(mkvmerge_probe if command[2] == str(source) else {
+                    "tracks": [{"id": 0, "type": "video"}, {"id": 1, "type": "audio"}, {"id": 2, "type": "audio"}]
+                })
             return Result()
-        if command[:3] == ["mkvmerge", "-o", str(source.with_name(".trackhound-movie.mkv"))]:
+        if command[:2] == ["mkvmerge", "-o"]:
             Path(command[2]).write_text("remuxed", encoding="utf-8")
             class Result:
                 stdout = ""
@@ -81,11 +83,13 @@ def test_remove_unwanted_audio_tracks_uses_mkvmerge_track_ids_and_keeps_backup(t
     assert remux_command == [
         "mkvmerge",
         "-o",
-        str(source.with_name(".trackhound-movie.mkv")),
+        remux_command[2],
         "--audio-tracks",
         "2,4",
         str(source),
     ]
+    assert Path(remux_command[2]).name.startswith(".trackhound-")
+    assert not Path(remux_command[2]).exists()
 
 
 def test_remove_unwanted_audio_tracks_refuses_to_remove_every_audio_track(tmp_path):

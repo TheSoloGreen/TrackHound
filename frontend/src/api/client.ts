@@ -56,6 +56,7 @@ export const scanApi = {
 
 // Media API
 export const mediaApi = {
+  getCapabilities: () => api.get('/api/media/capabilities'),
   getStats: () => api.get('/api/media/stats'),
   getShows: (params?: { page?: number; page_size?: number; media_type?: string; is_anime?: boolean; has_issues?: boolean; search?: string }) =>
     api.get('/api/media/shows', { params }),
@@ -74,8 +75,9 @@ export const mediaApi = {
     api.post(`/api/media/files/${id}/default-audio`, { language }),
   removeAudioTracks: (
     id: number,
-    data: { keep_track_indices?: number[]; keep_languages?: string[]; keep_backup?: boolean }
+    data: { keep_track_indices?: number[]; keep_languages?: string[]; keep_backup?: boolean; expected_last_scanned?: string }
   ) => api.post(`/api/media/files/${id}/audio-tracks/remove`, data),
+  getAudioTrackRemovalPlan: (id: number) => api.get(`/api/media/files/${id}/audio-tracks/plan`),
   rescanFile: (id: number) => api.post(`/api/media/files/${id}/rescan`),
   rescanShow: (id: number) => api.post(`/api/media/shows/${id}/rescan`),
 }

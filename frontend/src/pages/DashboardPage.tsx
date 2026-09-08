@@ -191,6 +191,18 @@ export default function DashboardPage() {
       )}
 
       {/* Stats Grid */}
+      {!!scanStatus?.errors.length && (
+        <details className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <summary className="cursor-pointer text-sm text-red-700 dark:text-red-400">
+            {scanStatus.errors.length} scan error{scanStatus.errors.length === 1 ? '' : 's'} reported
+          </summary>
+          <ul className="mt-2 space-y-1 text-sm text-red-700 dark:text-red-400 break-words">
+            {scanStatus.errors.slice(0, 50).map((message, index) => <li key={index}>{message}</li>)}
+          </ul>
+          {scanStatus.errors.length > 50 && <p className="mt-2 text-sm text-red-700 dark:text-red-400">Showing the first 50 errors.</p>}
+        </details>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={Layers}

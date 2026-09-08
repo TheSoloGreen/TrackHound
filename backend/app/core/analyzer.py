@@ -2,6 +2,18 @@
 
 from typing import Optional
 
+
+class AudioAnalysisError(RuntimeError):
+    """The file could not be analyzed; existing metadata must be retained."""
+
+
+def require_successful_analysis(result: dict) -> dict:
+    """Do not interpret a failed or skipped probe as a file with no audio."""
+    problem = result.get("error") or result.get("warning")
+    if problem:
+        raise AudioAnalysisError(f"Audio analysis failed: {problem}")
+    return result
+
 # Language code mappings
 LANGUAGE_MAP = {
     # ISO 639-2 to ISO 639-1
@@ -106,8 +118,7 @@ class AudioAnalyzer:
             try:
                 from pymediainfo import MediaInfo
                 # Try to parse nothing to see if libmediainfo is installed
-                MediaInfo.can_parse()
-                self._mediainfo_available = True
+                self._mediainfo_available = bool(MediaInfo.can_parse())
             except Exception:
                 self._mediainfo_available = False
         return self._mediainfo_available

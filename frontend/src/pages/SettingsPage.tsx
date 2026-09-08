@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, FolderOpen, ChevronRight, Folder } from 'lucide-react'
-import { settingsApi, scanApi } from '../api/client'
-import type { UserSettings, ScanLocation, DirectoryBrowseResponse, MediaType } from '../types'
+import { settingsApi, scanApi, mediaApi } from '../api/client'
+import type { UserSettings, ScanLocation, DirectoryBrowseResponse, MediaType, MediaEditCapabilities } from '../types'
 
 const MEDIA_TYPE_OPTIONS: { value: MediaType; label: string }[] = [
   { value: 'movie', label: 'Movies' },
@@ -126,6 +126,10 @@ function DirectoryPicker({
 
 export default function SettingsPage() {
   const queryClient = useQueryClient()
+  const { data: editCapabilities } = useQuery<MediaEditCapabilities>({
+    queryKey: ['mediaCapabilities'],
+    queryFn: async () => (await mediaApi.getCapabilities()).data,
+  })
   const [showPicker, setShowPicker] = useState(false)
   const [newLocation, setNewLocation] = useState({
     path: '',
@@ -156,6 +160,7 @@ export default function SettingsPage() {
     mutationFn: (data: Partial<UserSettings>) => settingsApi.update(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
+      queryClient.invalidateQueries({ queryKey: ['trackRemovalPlan'] })
     },
     onError: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -431,6 +436,7 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={settings?.audio_preferences.auto_fix_english_default_non_anime ?? false}
+              disabled={!editCapabilities?.set_default_audio}
               onChange={(e) => {
                 if (!settings) return
                 updateSettings.mutate({
@@ -447,7 +453,7 @@ export default function SettingsPage() {
                 Auto-fix default to English (non-anime)
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Automatically set English as default during scans for non-anime files when available
+                {editCapabilities?.default_audio_reason || 'Automatically set English as default during scans for writable non-anime MKV files.'}
               </p>
             </div>
           </label>

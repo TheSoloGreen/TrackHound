@@ -9,9 +9,10 @@ RUN npm run build
 # Production image
 FROM python:3.11-slim
 
-# Install mediainfo
+# Install media inspection and MKV editing tools. Writes remain opt-in.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends mediainfo && \
+    apt-get install -y --no-install-recommends mediainfo mkvtoolnix && \
+    mkvmerge --version && mkvpropedit --version && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -35,7 +36,7 @@ RUN groupadd --gid 1000 appuser && \
 USER appuser
 
 # Environment
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 ENVIRONMENT=production MEDIA_WRITES_ENABLED=false
 
 EXPOSE 8000
 

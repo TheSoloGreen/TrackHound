@@ -21,4 +21,6 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///./data/trackhound.db
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:8383}
       - ENVIRONMENT=production
+      - ALLOWED_PLEX_USER_IDS=${ALLOWED_PLEX_USER_IDS:-}
+      - MEDIA_WRITES_ENABLED=${MEDIA_WRITES_ENABLED:-false}
     restart: unless-stopped

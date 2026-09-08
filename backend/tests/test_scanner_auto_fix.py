@@ -84,13 +84,28 @@ class MediaScannerAutoFixTests(unittest.TestCase):
 
         self.scanner.analyzer.analyze = MagicMock(return_value=refreshed_info)
 
-        with patch("app.core.scanner.set_default_track_by_index", return_value=True) as fix_mock:
+        with (
+            patch("app.core.scanner.get_media_edit_capabilities", return_value=MagicMock(set_default_audio=True)),
+            patch("app.core.scanner.set_default_track_by_index", return_value=True) as fix_mock,
+        ):
             result = self.scanner._auto_fix_default_track(
                 "/media/movies/file.mkv", audio_info, is_anime=False
             )
 
         self.assertEqual(result, refreshed_info)
         fix_mock.assert_called_once_with("/media/movies/file.mkv", audio_info["audio_tracks"], 1)
+
+    def test_auto_fix_respects_instance_write_policy(self):
+        audio_info = {"audio_tracks": [
+            {"index": 0, "language": "ja", "is_default": True},
+            {"index": 1, "language": "en", "is_default": False},
+        ]}
+        with (
+            patch("app.core.scanner.get_media_edit_capabilities", return_value=MagicMock(set_default_audio=False)),
+            patch("app.core.scanner.set_default_track_by_index") as fix_mock,
+        ):
+            assert self.scanner._auto_fix_default_track("/media/file.mkv", audio_info, False) is audio_info
+        fix_mock.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -2,11 +2,21 @@
 
 from dataclasses import dataclass
 import json
+import logging
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
+from threading import Lock
 
 from app.core.analyzer import normalize_language
+
+_edit_lock = Lock()
+logger = logging.getLogger(__name__)
+PROBE_TIMEOUT_SECONDS = 30
+DEFAULT_EDIT_TIMEOUT_SECONDS = 60
+REMUX_TIMEOUT_SECONDS = 3600
 
 
 class AudioTrackRemovalError(RuntimeError):
@@ -35,6 +45,15 @@ def find_track_index_for_language(audio_tracks: list[dict], language: str) -> in
 
 def set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_index: int) -> bool:
     """Set the provided audio track index as default for an MKV file."""
+    if not _edit_lock.acquire(blocking=False):
+        return False
+    try:
+        return _set_default_track_by_index(file_path, audio_tracks, track_index)
+    finally:
+        _edit_lock.release()
+
+
+def _set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_index: int) -> bool:
     if Path(file_path).suffix.lower() != ".mkv":
         return False
 
@@ -57,9 +76,9 @@ def set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_i
     command.extend(["--edit", f"track:a{track_index + 1}", "--set", "flag-default=1"])
 
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=DEFAULT_EDIT_TIMEOUT_SECONDS)
         return True
-    except subprocess.CalledProcessError:
+    except (subprocess.SubprocessError, OSError):
         return False
 
 
@@ -147,8 +166,9 @@ def _get_mkvmerge_audio_track_ids(file_path: str) -> list[int]:
             check=True,
             capture_output=True,
             text=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
-    except subprocess.CalledProcessError as exc:
+    except (subprocess.SubprocessError, OSError) as exc:
         raise AudioTrackRemovalError("Unable to inspect MKV tracks with mkvmerge.") from exc
 
     try:
@@ -186,9 +206,9 @@ def _build_audio_track_id_selection(
         )
 
     mkvmerge_audio_ids = _get_mkvmerge_audio_track_ids(file_path)
-    if len(mkvmerge_audio_ids) < len(valid_track_indices):
+    if valid_track_indices != list(range(len(valid_track_indices))) or len(mkvmerge_audio_ids) != len(valid_track_indices):
         raise AudioTrackRemovalError(
-            "mkvmerge reported fewer audio tracks than TrackHound has stored. Rescan the file first."
+            "The file's audio tracks do not match the stored analysis. Rescan the file first."
         )
 
     kept_mkvmerge_ids = [mkvmerge_audio_ids[index] for index in keep_track_indices]
@@ -205,6 +225,24 @@ def remove_unwanted_audio_tracks(
     *,
     keep_backup: bool = True,
 ) -> AudioTrackRemovalResult:
+    """Serialize edits within the single-worker application process."""
+    if not _edit_lock.acquire(blocking=False):
+        raise AudioTrackRemovalError("Another media edit is in progress. Try again when it finishes.")
+    try:
+        return _remove_unwanted_audio_tracks(file_path, audio_tracks, keep_track_indices, keep_backup=keep_backup)
+    except OSError as exc:
+        raise AudioTrackRemovalError("Unable to access the media file, create temporary output, or clean up an edit.") from exc
+    finally:
+        _edit_lock.release()
+
+
+def _remove_unwanted_audio_tracks(
+    file_path: str,
+    audio_tracks: list[dict],
+    keep_track_indices: list[int],
+    *,
+    keep_backup: bool,
+) -> AudioTrackRemovalResult:
     """Remux an MKV with only the selected audio tracks kept.
 
     This uses mkvmerge to write a new file next to the source, then replaces the
@@ -216,6 +254,7 @@ def remove_unwanted_audio_tracks(
         raise AudioTrackRemovalError("Audio track removal currently supports MKV files only.")
     if not source.exists():
         raise AudioTrackRemovalError("Media file does not exist on disk.")
+    source_stat = source.stat()
 
     kept_indices, removed_indices, kept_mkvmerge_ids = _build_audio_track_id_selection(
         file_path, audio_tracks, keep_track_indices
@@ -227,8 +266,13 @@ def remove_unwanted_audio_tracks(
             backup_path=None,
         )
 
-    temporary_output = source.with_name(f".trackhound-{source.name}")
     backup_path = source.with_suffix(source.suffix + ".bak") if keep_backup else None
+    if backup_path and (backup_path.exists() or backup_path.is_symlink()):
+        raise AudioTrackRemovalError("A .bak file already exists. Preserve or move that backup before editing again.")
+    # Exclusive creation avoids collisions with another run or an existing file.
+    fd, temporary_name = tempfile.mkstemp(prefix=".trackhound-", suffix=".mkv", dir=source.parent)
+    os.close(fd)
+    temporary_output = Path(temporary_name)
     command = [
         "mkvmerge",
         "-o",
@@ -238,23 +282,46 @@ def remove_unwanted_audio_tracks(
         str(source),
     ]
 
+    backup_reserved = False
+    source_moved = False
     try:
-        subprocess.run(command, check=True, capture_output=True, text=True)
-        if keep_backup:
-            if backup_path and backup_path.exists():
-                backup_path.unlink()
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=REMUX_TIMEOUT_SECONDS)
+        if not temporary_output.stat().st_size or len(_get_mkvmerge_audio_track_ids(str(temporary_output))) != len(kept_indices):
+            raise AudioTrackRemovalError("The remuxed file failed verification. The original was retained.")
+        current_stat = source.stat()
+        if (source_stat.st_ino, source_stat.st_size, source_stat.st_mtime_ns) != (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime_ns):
+            raise AudioTrackRemovalError("The source file changed during remuxing. Rescan before editing again.")
+        shutil.copymode(source, temporary_output)
+        if backup_path:
+            # Reserve without overwriting any existing backup, including symlinks.
+            with backup_path.open("xb"):
+                pass
+            backup_reserved = True
             source.replace(backup_path)
+            source_moved = True
             temporary_output.replace(source)
         else:
             temporary_output.replace(source)
-    except subprocess.CalledProcessError as exc:
-        if temporary_output.exists():
-            temporary_output.unlink()
-        raise AudioTrackRemovalError("mkvmerge failed while removing audio tracks.") from exc
+    except subprocess.SubprocessError as exc:
+        raise AudioTrackRemovalError("Audio-track removal failed or timed out. The original was retained.") from exc
     except OSError as exc:
-        if temporary_output.exists():
-            temporary_output.unlink()
-        raise AudioTrackRemovalError("Unable to replace media file after remuxing.") from exc
+        if source_moved and backup_path:
+            try:
+                if source.exists():
+                    raise FileExistsError("A different file now occupies the source path")
+                backup_path.replace(source)
+            except OSError as restore_error:
+                raise AudioTrackRemovalError(
+                    f"Replacement and automatic restoration failed. The original is preserved at {backup_path}."
+                ) from restore_error
+        elif backup_reserved and backup_path:
+            backup_path.unlink()
+        raise AudioTrackRemovalError("Unable to replace media file. The original was retained or restored.") from exc
+    finally:
+        try:
+            temporary_output.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Unable to remove remux temporary output: %s", temporary_output)
 
     return AudioTrackRemovalResult(
         kept_track_indices=kept_indices,

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Tv, Loader2 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { authApi } from '../api/client'
+import { isAxiosError } from 'axios'
 
 export default function LoginPage() {
   const { isAuthenticated, login } = useAuth()
@@ -48,6 +49,12 @@ export default function LoginPage() {
         navigate('/', { replace: true })
       } catch (err: unknown) {
         if (cancelledRef.current) return
+        if (isAxiosError(err) && err.response?.status === 403) {
+          setError(err.response.data?.detail || 'This Plex account is not approved for this instance.')
+          setIsLoading(false)
+          if (windowCheckRef.current) clearInterval(windowCheckRef.current)
+          return
+        }
         attempts++
         if (attempts < maxAttempts) {
           // PIN not yet authorized, keep polling

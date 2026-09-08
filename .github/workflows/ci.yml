@@ -27,6 +27,9 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Install media tools for real MKV integration tests
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg mediainfo mkvtoolnix
+
       - name: Run backend tests
         run: python -m pytest -q
 
@@ -59,6 +62,7 @@ jobs:
     needs:
       - backend-tests
       - frontend-build
+      - container-checks
 
     # Don't publish images from pull requests
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -97,3 +101,43 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  container-checks:
+    name: Container and Compose checks
+    runs-on: ubuntu-latest
+    env:
+      # Deliberately synthetic CI-only values, never deployment credentials.
+      SECRET_KEY: ci-only-signing-key-00000000000000000000000000000000
+      ENCRYPTION_KEY: ci-only-encryption-key-000000000000000000000000000
+      ALLOWED_PLEX_USER_IDS: '123'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Validate both Compose configurations
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose -f docker-compose.postgres.yml config --quiet
+      - name: Build production image
+        run: docker build -t trackhound:test .
+      - name: Reject direct image startup with default keys
+        run: |
+          if docker run --rm trackhound:test python -c 'from app.config import get_settings; get_settings()'; then
+            exit 1
+          fi
+      - name: Verify native tools and default write policy
+        run: |
+          docker run --rm -e SECRET_KEY -e ENCRYPTION_KEY trackhound:test python -c 'import shutil; from app.core.media_access import get_media_edit_capabilities; assert shutil.which("mkvmerge") and shutil.which("mkvpropedit"); c = get_media_edit_capabilities(); assert not c.set_default_audio and not c.remove_audio_tracks'
+      - name: Verify startup and health endpoint
+        run: |
+          docker run -d --name trackhound-smoke -e SECRET_KEY -e ENCRYPTION_KEY -e ALLOWED_PLEX_USER_IDS trackhound:test
+          for attempt in $(seq 1 30); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' trackhound-smoke)" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs trackhound-smoke
+          exit 1
+      - name: Clean up smoke container
+        if: always()
+        run: docker rm -f trackhound-smoke || true
