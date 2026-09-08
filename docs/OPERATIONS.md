@@ -19,8 +19,18 @@
    Explicitly enable writes and writable media mounts only for libraries you
    intend TrackHound to edit.
 
-This change adds no database columns. Existing migration behavior is unchanged;
-versioned database migrations remain a separate follow-up.
+Startup now upgrades through a versioned Alembic chain before serving requests.
+All pending schema changes commit together; an error rolls the entire upgrade back
+and prevents startup. SQLite table rebuilds run under one write transaction, with
+foreign keys checked before commit and re-enabled afterward. PostgreSQL upgrades
+use a transaction and an advisory lock.
+
+The baseline covers the initial, pre-ownership, and previously unversioned schemas.
+As in the earlier ownership migration, unowned legacy rows go to the oldest stored
+user, or an inactive bootstrap owner if no user exists. Rows whose parents were
+already deleted are cleaned up before foreign keys are enforced. Back up first;
+inspect legacy ownership before exposing a restored instance to additional users.
+Future schema changes require new revisions; do not edit applied revisions.
 
 ## Keys and Plex reconnection
 
@@ -88,3 +98,107 @@ separately when needed.
 
 If rolling back an image after future schema changes, use the backup associated
 with that image rather than assuming an older version understands a newer schema.
+
+## SQLite backup and restore commands
+
+The backup command uses SQLite's online backup API, so committed WAL changes are
+included without copying a live database file. It verifies integrity and refuses
+to overwrite a previous backup. Run these from the Docker host; adjust the
+container name if yours differs:
+
+```bash
+TRACKHOUND_BACKUP="trackhound-$(date -u +%Y%m%dT%H%M%SZ).db"
+docker exec trackhound python -m app.backup /app/data/trackhound.db "/tmp/$TRACKHOUND_BACKUP"
+docker cp "trackhound:/tmp/$TRACKHOUND_BACKUP" "./$TRACKHOUND_BACKUP"
+```
+
+Back up `.env` and the exact deployed image digest separately. A pre-upgrade
+backup should be taken after stopping scans and edits. Verify the copied snapshot:
+
+```bash
+python - "$TRACKHOUND_BACKUP" <<'PY'
+import sqlite3, sys
+from pathlib import Path
+with sqlite3.connect(Path(sys.argv[1]).resolve().as_uri() + '?mode=ro', uri=True) as db:
+    print(db.execute('PRAGMA integrity_check').fetchone()[0])
+    print('Media rows:', db.execute('SELECT COUNT(*) FROM media_files').fetchone()[0])
+PY
+```
+
+To restore, stop the container and preserve the complete current data directory.
+Restore into a new directory so old `-wal`/`-shm` files cannot be replayed onto the
+snapshot. For the example Unraid mapping:
+
+```bash
+docker stop trackhound
+TRACKHOUND_RESTORE_DIR="/mnt/user/appdata/trackhound-restore-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir "$TRACKHOUND_RESTORE_DIR"
+cp -- "$TRACKHOUND_BACKUP" "$TRACKHOUND_RESTORE_DIR/trackhound.db"
+chown -R 1000:1000 "$TRACKHOUND_RESTORE_DIR"
+```
+
+Change the container's `/app/data` mapping to that new directory, restore the
+matching encryption key/configuration, and start the intended image version with
+media writes disabled. The previous directory remains available for recovery.
+Check health, sign-in, saved locations, row counts, and a sample rescan. Reverting
+the volume mapping alone is insufficient if you also changed the encryption key.
+
+## PostgreSQL dump, restore, and volume replacement
+
+Use the database container's own client binaries so dump/restore versions match.
+The examples use the committed PostgreSQL Compose file and its default database
+name and user. Run while no scan or edit is active:
+
+```bash
+TRACKHOUND_PG_BACKUP="trackhound-$(date -u +%Y%m%dT%H%M%SZ).dump"
+docker compose -f docker-compose.postgres.yml exec -T db pg_dump -U trackhound -d trackhound --format=custom > "$TRACKHOUND_PG_BACKUP"
+docker compose -f docker-compose.postgres.yml exec -T db pg_restore --list < "$TRACKHOUND_PG_BACKUP"
+```
+
+Check both commands' exit status before relying on the dump. Store the matching
+`.env`, image digest, and migration version with it. A full dump includes the
+migration-version table. To restore without deleting the existing volume, stop the
+application and create a new named volume:
+
+```bash
+docker compose -f docker-compose.postgres.yml stop trackhound
+TRACKHOUND_RESTORE_VOLUME="trackhound-postgres-restore-$(date -u +%Y%m%dT%H%M%SZ)"
+docker volume create "$TRACKHOUND_RESTORE_VOLUME"
+cat > restore.override.yml <<YAML
+volumes:
+  postgres_data:
+    name: $TRACKHOUND_RESTORE_VOLUME
+    external: true
+YAML
+docker compose -f docker-compose.postgres.yml -f restore.override.yml up -d db
+```
+
+Wait until `docker compose -f docker-compose.postgres.yml -f restore.override.yml
+ps` reports the database healthy, then restore into its empty database:
+
+```bash
+docker compose -f docker-compose.postgres.yml -f restore.override.yml exec -T db pg_restore -U trackhound --dbname=trackhound --exit-on-error --single-transaction --no-owner < "$TRACKHOUND_PG_BACKUP"
+docker compose -f docker-compose.postgres.yml -f restore.override.yml exec -T db psql -U trackhound -d trackhound -c 'SELECT COUNT(*) FROM media_files;'
+docker compose -f docker-compose.postgres.yml -f restore.override.yml up -d trackhound
+```
+
+Keep the override file in use while this restored volume is active. Omitting it
+selects the original volume again. Never run `down -v` as part of this procedure.
+To roll back the application and schema, select the pre-upgrade image digest and
+restore its matching pre-upgrade database backup and keys. Alembic downgrades are
+intentionally blocked for the legacy adoption and per-user uniqueness changes;
+collapsing shared paths back into a global constraint could discard data.
+
+CI rehearses backup → upgrade → restore → upgrade on both SQLite and PostgreSQL
+with users, settings, locations, shows, seasons, files, and audio tracks. It also
+injects a late migration failure and checks that schema, data, token encryption,
+and migration version all roll back.
+
+## Reverse proxy and instance trust
+
+Use HTTPS at the reverse proxy, restrict direct access to the backend port, and
+set `CORS_ORIGINS` to the exact browser origin. Avoid exposing the Unraid management
+interface alongside the application. Keep the account allowlist small: approved
+users are trusted instance operators and share the configured mounted filesystem.
+The allowlist is enforced on every authenticated API request; proxy identity
+headers do not grant access. Keep writable media mounts limited to intended paths.

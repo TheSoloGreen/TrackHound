@@ -82,3 +82,13 @@ the local editing environment.
 Existing issues are at `https://github.com/TheSoloGreen/TrackHound/issues/<number>`.
 When resuming, inspect the branch and PR checks first, preserve completed work,
 then select the next bounded batch from this table.
+
+## Database follow-up: fix/database-integrity
+
+This branch depends on fix/secure-media-editing and adds the versioned historical
+upgrade path (#27), per-user file uniqueness and per-file savepoints (#33),
+SQLite foreign-key enforcement with orphan cleanup (#39), and consistent backup
+commands plus backup/upgrade/restore integration tests (#41). Historical fixtures
+come from the actual initial and pre-ownership commits. PostgreSQL tests run
+against isolated databases in the CI service. See OPERATIONS.md for the required
+backup and rollback procedure. Later scan and UI issues are still in progress.

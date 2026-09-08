@@ -262,7 +262,7 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
 
     mf.container_format = refreshed_audio.get("container")
     mf.duration_ms = refreshed_audio.get("duration_ms")
-    mf.last_scanned = datetime.now(timezone.utc)
+    mf.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
     mf.file_size = after.st_size
     mf.last_modified = datetime.fromtimestamp(after.st_mtime)
 

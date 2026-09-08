@@ -3,8 +3,8 @@
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from app.models.engine import create_database_engine
 
 from app.config import get_settings
 
@@ -17,33 +17,7 @@ if settings.is_sqlite:
         db_path = db_path[2:]
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-sqlite_connect_args = (
-    {
-        "check_same_thread": False,
-        # Wait up to 30s for pending write locks instead of failing fast.
-        "timeout": 30,
-    }
-    if settings.is_sqlite
-    else {}
-)
-
-# Create async engine
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,
-    # SQLite-specific settings
-    connect_args=sqlite_connect_args,
-)
-
-if settings.is_sqlite:
-    # Reduce SQLITE_BUSY errors under concurrent read/write load.
-    @event.listens_for(engine.sync_engine, "connect")
-    def set_sqlite_pragma(dbapi_connection, _connection_record) -> None:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA busy_timeout = 30000")
-        cursor.execute("PRAGMA journal_mode = WAL")
-        cursor.execute("PRAGMA synchronous = NORMAL")
-        cursor.close()
+engine = create_database_engine(settings.database_url, echo=settings.debug)
 
 # Session factory
 async_session_maker = async_sessionmaker(
@@ -69,14 +43,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Initialize database tables."""
-    from app.models.entities import Base
-    from app.models.migrations import (
-        apply_ownership_migrations,
-        apply_token_encryption_migration,
-    )
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await apply_ownership_migrations(conn)
-        await apply_token_encryption_migration(conn)
+    """Upgrade the schema before serving any application requests."""
+    from app.models.migrations import upgrade_database
+    await upgrade_database(engine)

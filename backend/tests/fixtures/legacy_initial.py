@@ -1,15 +1,12 @@
+# Historical fixture copied from c1d8f8db841e1297609c5ae781532bbe86aa3f14.
+# Preserve this schema; it must not follow current models.
 """SQLAlchemy ORM entity models."""
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text, Index, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-
-def _utcnow() -> datetime:
-    """Return UTC without an offset for the existing TIMESTAMP columns."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):
@@ -27,27 +24,18 @@ class User(Base):
     plex_user_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     plex_username: Mapped[str] = mapped_column(String(255), nullable=False)
     plex_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    plex_token: Mapped[str] = mapped_column(Text, nullable=False)
+    plex_token: Mapped[str] = mapped_column(Text, nullable=False)  # Encrypted
     plex_thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, nullable=False
     )
     last_login: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
     # Relationships
     preferences: Mapped[list["UserPreference"]] = relationship(
         "UserPreference", back_populates="user", cascade="all, delete-orphan"
-    )
-    shows: Mapped[list["Show"]] = relationship(
-        "Show", back_populates="user", cascade="all, delete-orphan"
-    )
-    media_files: Mapped[list["MediaFile"]] = relationship(
-        "MediaFile", back_populates="user", cascade="all, delete-orphan"
-    )
-    scan_locations: Mapped[list["ScanLocation"]] = relationship(
-        "ScanLocation", back_populates="user", cascade="all, delete-orphan"
     )
 
 
@@ -68,18 +56,12 @@ class UserPreference(Base):
 
 
 class Show(Base):
-    """Media title model (movie, TV show, or anime)."""
+    """TV show model."""
 
     __tablename__ = "shows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
     title: Mapped[str] = mapped_column(String(512), nullable=False)
-    media_type: Mapped[str] = mapped_column(
-        String(20), default="tv", nullable=False
-    )  # tv, movie, anime
     plex_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     plex_rating_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_anime: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -88,22 +70,15 @@ class Show(Base):
     )  # plex_genre, folder, manual
     thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="shows")
     seasons: Mapped[list["Season"]] = relationship(
         "Season", back_populates="show", cascade="all, delete-orphan"
-    )
-    media_files: Mapped[list["MediaFile"]] = relationship(
-        "MediaFile",
-        back_populates="show",
-        foreign_keys="MediaFile.show_id",
-        cascade="all, delete-orphan",
     )
 
 
@@ -131,19 +106,12 @@ class MediaFile(Base):
     """Media file model."""
 
     __tablename__ = "media_files"
-    __table_args__ = (UniqueConstraint("user_id", "file_path", name="uq_media_files_user_path"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    show_id: Mapped[Optional[int]] = mapped_column(
-        Integer, ForeignKey("shows.id", ondelete="SET NULL"), nullable=True
-    )
     season_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("seasons.id", ondelete="SET NULL"), nullable=True
     )
-    file_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     episode_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     episode_title: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
@@ -151,17 +119,13 @@ class MediaFile(Base):
     container_format: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     duration_ms: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     last_scanned: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, nullable=False
     )
     last_modified: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     has_issues: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="media_files")
-    show: Mapped[Optional["Show"]] = relationship(
-        "Show", back_populates="media_files", foreign_keys=[show_id]
-    )
     season: Mapped[Optional["Season"]] = relationship(
         "Season", back_populates="media_files"
     )
@@ -204,23 +168,15 @@ class ScanLocation(Base):
     """Scan location configuration."""
 
     __tablename__ = "scan_locations"
-    __table_args__ = (Index("uq_scan_locations_user_path", "user_id", "path", unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    path: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
     label: Mapped[str] = mapped_column(String(255), nullable=False)
-    media_type: Mapped[str] = mapped_column(
-        String(20), default="tv", nullable=False
-    )  # tv, movie, anime
+    is_anime_folder: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_scanned: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=_utcnow, nullable=False
+        DateTime, default=datetime.utcnow, nullable=False
     )
 
-    # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="scan_locations")

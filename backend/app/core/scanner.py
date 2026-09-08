@@ -187,214 +187,218 @@ class MediaScanner:
     ) -> Optional[MediaFile]:
         """Process a single media file."""
         try:
-            is_movie = media_type == "movie"
-            is_anime = media_type == "anime"
-
-            # Check if file already exists in database
-            result = await db.execute(
-                select(MediaFile).where(
-                    MediaFile.file_path == file_path,
-                    MediaFile.user_id == user_id,
-                )
-            )
-            existing = result.scalar_one_or_none()
-
-            # Get file stats
-            stat = os.stat(file_path)
-            file_mtime = datetime.fromtimestamp(stat.st_mtime)
-
-            # Skip if file hasn't changed (incremental scan)
-            if existing and existing.last_modified >= file_mtime:
-                return existing
-
-            # Analyze audio tracks
-            audio_info = require_successful_analysis(self.analyzer.analyze(file_path))
-
-            # Determine title and metadata based on media type
-            if is_movie:
-                show_title = parse_movie_title(file_path, base_path)
-                show_info = {"show": show_title, "season": None, "episode": None}
-            else:
-                show_info = parse_show_info(file_path, base_path)
-                show_title = show_info.get("show")
-
-            # Try to get metadata from Plex first
-            plex_metadata = None
-            if self.plex_connector:
-                plex_metadata = self.plex_connector.sync_show_metadata(
-                    file_path=file_path,
-                    title_from_path=show_title,
-                )
-
-            # Determine final title and anime status
-            if plex_metadata:
-                show_title = plex_metadata["title"]
-                plex_is_anime = plex_metadata["is_anime"]
-                anime_source = "plex_genre" if plex_is_anime else None
-                plex_rating_key = plex_metadata.get("plex_rating_key")
-                thumb_url = plex_metadata.get("thumb_url")
-                # If Plex says it's anime and we're in a TV folder, upgrade to anime
-                if plex_is_anime and media_type == "tv":
-                    is_anime = True
-            else:
-                anime_source = "folder" if is_anime else None
-                plex_rating_key = None
-                thumb_url = None
-
-            # Automatically fix default audio for non-anime content when possible
-            audio_info = require_successful_analysis(
-                self._auto_fix_default_track(
-                    file_path=file_path, audio_info=audio_info, is_anime=is_anime,
-                )
-            )
-
-            # Find or create show
-            show = None
-            season = None
-
-            if show_title:
-                # First try to find by Plex rating key
-                if plex_rating_key:
-                    result = await db.execute(
-                        select(Show).where(
-                            Show.plex_rating_key == plex_rating_key,
-                            Show.user_id == user_id,
-                        )
-                    )
-                    show = result.scalar_one_or_none()
-
-                # Then try by title
-                if not show:
-                    result = await db.execute(
-                        select(Show).where(
-                            Show.title == show_title, Show.user_id == user_id
-                        )
-                    )
-                    show = result.scalar_one_or_none()
-
-                # Check path-based title (handles English folder names)
-                if (
-                    not show
-                    and show_info.get("show")
-                    and show_info["show"] != show_title
-                ):
-                    result = await db.execute(
-                        select(Show).where(
-                            Show.title == show_info["show"], Show.user_id == user_id
-                        )
-                    )
-                    existing_show = result.scalar_one_or_none()
-                    if existing_show:
-                        show = existing_show
-                        if plex_metadata:
-                            show.title = show_title
-                            show.plex_rating_key = plex_rating_key
-                            show.is_anime = is_anime
-                            show.anime_source = anime_source
-                            show.thumb_url = thumb_url
-
-                if not show:
-                    show = Show(
-                        user_id=user_id,
-                        title=show_title,
-                        media_type=media_type,
-                        plex_rating_key=plex_rating_key,
-                        is_anime=is_anime,
-                        anime_source=anime_source,
-                        thumb_url=thumb_url,
-                    )
-                    db.add(show)
-                    await db.flush()
-                elif plex_metadata and not show.plex_rating_key:
-                    show.plex_rating_key = plex_rating_key
-                    show.is_anime = is_anime
-                    show.anime_source = anime_source
-                    if thumb_url:
-                        show.thumb_url = thumb_url
-
-                # Find or create season (TV/anime only)
-                if not is_movie and show_info.get("season"):
-                    result = await db.execute(
-                        select(Season).where(
-                            Season.show_id == show.id,
-                            Season.season_number == show_info["season"],
-                        )
-                    )
-                    season = result.scalar_one_or_none()
-
-                    if not season:
-                        season = Season(
-                            show_id=show.id,
-                            season_number=show_info["season"],
-                        )
-                        db.add(season)
-                        await db.flush()
-
-            # Create or update media file
-            if existing:
-                media_file = existing
-                from app.models.entities import AudioTrack
-                from sqlalchemy import delete
-
-                await db.execute(
-                    delete(AudioTrack).where(AudioTrack.media_file_id == media_file.id)
-                )
-            else:
-                media_file = MediaFile(user_id=user_id, file_path=file_path)
-                db.add(media_file)
-
-            # Update media file info
-            media_file.filename = os.path.basename(file_path)
-            media_file.show_id = show.id if show else None
-            media_file.season_id = season.id if season else None
-            media_file.episode_number = (
-                show_info.get("episode") if not is_movie else None
-            )
-            media_file.file_size = stat.st_size
-            media_file.container_format = audio_info.get("container")
-            media_file.duration_ms = audio_info.get("duration_ms")
-            media_file.last_scanned = datetime.now(timezone.utc)
-            media_file.last_modified = file_mtime
-
-            await db.flush()
-
-            # Add audio tracks
-            from app.models.entities import AudioTrack
-
-            for track_info in audio_info.get("audio_tracks", []):
-                track = AudioTrack(
-                    media_file_id=media_file.id,
-                    track_index=track_info.get("index", 0),
-                    language=track_info.get("language"),
-                    language_raw=track_info.get("language_raw"),
-                    codec=track_info.get("codec"),
-                    channels=track_info.get("channels"),
-                    channel_layout=track_info.get("channel_layout"),
-                    bitrate=track_info.get("bitrate"),
-                    is_default=track_info.get("is_default", False),
-                    is_forced=track_info.get("is_forced", False),
-                    title=track_info.get("title"),
-                )
-                db.add(track)
-
-            await db.flush()
-
-            # Evaluate preferences and set issues
-            final_is_anime = show.is_anime if show else is_anime
-            issues = self.preference_engine.evaluate(
-                audio_info.get("audio_tracks", []),
-                is_anime=final_is_anime,
-            )
-
-            media_file.has_issues = len(issues) > 0
-            media_file.issue_details = "; ".join(issues) if issues else None
-
-            return media_file
-
+            async with db.begin_nested():
+                return await self._process_file(file_path, base_path, media_type, user_id, db)
         except Exception as e:
             logger.error("Error processing file %s: %s", file_path, e)
             await scan_state_manager.append_error(user_id, f"{file_path}: {str(e)}")
             return None
+
+    async def _process_file(self, file_path, base_path, media_type, user_id, db):
+        is_movie = media_type == "movie"
+        is_anime = media_type == "anime"
+
+        # Check if file already exists in database
+        result = await db.execute(
+            select(MediaFile).where(
+                MediaFile.file_path == file_path,
+                MediaFile.user_id == user_id,
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        # Get file stats
+        stat = os.stat(file_path)
+        file_mtime = datetime.fromtimestamp(stat.st_mtime)
+
+        # Skip if file hasn't changed (incremental scan)
+        if existing and existing.last_modified >= file_mtime:
+            return existing
+
+        # Analyze audio tracks
+        audio_info = require_successful_analysis(self.analyzer.analyze(file_path))
+
+        # Determine title and metadata based on media type
+        if is_movie:
+            show_title = parse_movie_title(file_path, base_path)
+            show_info = {"show": show_title, "season": None, "episode": None}
+        else:
+            show_info = parse_show_info(file_path, base_path)
+            show_title = show_info.get("show")
+
+        # Try to get metadata from Plex first
+        plex_metadata = None
+        if self.plex_connector:
+            plex_metadata = self.plex_connector.sync_show_metadata(
+                file_path=file_path,
+                title_from_path=show_title,
+            )
+
+        # Determine final title and anime status
+        if plex_metadata:
+            show_title = plex_metadata["title"]
+            plex_is_anime = plex_metadata["is_anime"]
+            anime_source = "plex_genre" if plex_is_anime else None
+            plex_rating_key = plex_metadata.get("plex_rating_key")
+            thumb_url = plex_metadata.get("thumb_url")
+            # If Plex says it's anime and we're in a TV folder, upgrade to anime
+            if plex_is_anime and media_type == "tv":
+                is_anime = True
+        else:
+            anime_source = "folder" if is_anime else None
+            plex_rating_key = None
+            thumb_url = None
+
+        # Automatically fix default audio for non-anime content when possible
+        audio_info = require_successful_analysis(
+            self._auto_fix_default_track(
+                file_path=file_path, audio_info=audio_info, is_anime=is_anime,
+            )
+        )
+
+        # Find or create show
+        show = None
+        season = None
+
+        if show_title:
+            # First try to find by Plex rating key
+            if plex_rating_key:
+                result = await db.execute(
+                    select(Show).where(
+                        Show.plex_rating_key == plex_rating_key,
+                        Show.user_id == user_id,
+                    )
+                )
+                show = result.scalar_one_or_none()
+
+            # Then try by title
+            if not show:
+                result = await db.execute(
+                    select(Show).where(
+                        Show.title == show_title, Show.user_id == user_id
+                    )
+                )
+                show = result.scalar_one_or_none()
+
+            # Check path-based title (handles English folder names)
+            if (
+                not show
+                and show_info.get("show")
+                and show_info["show"] != show_title
+            ):
+                result = await db.execute(
+                    select(Show).where(
+                        Show.title == show_info["show"], Show.user_id == user_id
+                    )
+                )
+                existing_show = result.scalar_one_or_none()
+                if existing_show:
+                    show = existing_show
+                    if plex_metadata:
+                        show.title = show_title
+                        show.plex_rating_key = plex_rating_key
+                        show.is_anime = is_anime
+                        show.anime_source = anime_source
+                        show.thumb_url = thumb_url
+
+            if not show:
+                show = Show(
+                    user_id=user_id,
+                    title=show_title,
+                    media_type=media_type,
+                    plex_rating_key=plex_rating_key,
+                    is_anime=is_anime,
+                    anime_source=anime_source,
+                    thumb_url=thumb_url,
+                )
+                db.add(show)
+                await db.flush()
+            elif plex_metadata and not show.plex_rating_key:
+                show.plex_rating_key = plex_rating_key
+                show.is_anime = is_anime
+                show.anime_source = anime_source
+                if thumb_url:
+                    show.thumb_url = thumb_url
+
+            # Find or create season (TV/anime only)
+            if not is_movie and show_info.get("season"):
+                result = await db.execute(
+                    select(Season).where(
+                        Season.show_id == show.id,
+                        Season.season_number == show_info["season"],
+                    )
+                )
+                season = result.scalar_one_or_none()
+
+                if not season:
+                    season = Season(
+                        show_id=show.id,
+                        season_number=show_info["season"],
+                    )
+                    db.add(season)
+                    await db.flush()
+
+        # Create or update media file
+        if existing:
+            media_file = existing
+            from app.models.entities import AudioTrack
+            from sqlalchemy import delete
+
+            await db.execute(
+                delete(AudioTrack).where(AudioTrack.media_file_id == media_file.id)
+            )
+        else:
+            media_file = MediaFile(user_id=user_id, file_path=file_path)
+            db.add(media_file)
+
+        # Update media file info
+        media_file.filename = os.path.basename(file_path)
+        media_file.show_id = show.id if show else None
+        media_file.season_id = season.id if season else None
+        media_file.episode_number = (
+            show_info.get("episode") if not is_movie else None
+        )
+        media_file.file_size = stat.st_size
+        media_file.container_format = audio_info.get("container")
+        media_file.duration_ms = audio_info.get("duration_ms")
+        media_file.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
+        media_file.last_modified = file_mtime
+
+        await db.flush()
+
+        # Add audio tracks
+        from app.models.entities import AudioTrack
+
+        for track_info in audio_info.get("audio_tracks", []):
+            track = AudioTrack(
+                media_file_id=media_file.id,
+                track_index=track_info.get("index", 0),
+                language=track_info.get("language"),
+                language_raw=track_info.get("language_raw"),
+                codec=track_info.get("codec"),
+                channels=track_info.get("channels"),
+                channel_layout=track_info.get("channel_layout"),
+                bitrate=track_info.get("bitrate"),
+                is_default=track_info.get("is_default", False),
+                is_forced=track_info.get("is_forced", False),
+                title=track_info.get("title"),
+            )
+            db.add(track)
+
+        await db.flush()
+
+        # Evaluate preferences and set issues
+        final_is_anime = show.is_anime if show else is_anime
+        issues = self.preference_engine.evaluate(
+            audio_info.get("audio_tracks", []),
+            is_anime=final_is_anime,
+        )
+
+        media_file.has_issues = len(issues) > 0
+        media_file.issue_details = "; ".join(issues) if issues else None
+
+        return media_file
+
 
 
 async def _load_user_audio_preferences(db: AsyncSession, user_id: int) -> AudioPreferences:
@@ -499,7 +503,7 @@ async def run_scan(
                 )
                 scan_loc = result.scalar_one_or_none()
                 if scan_loc:
-                    scan_loc.last_scanned = datetime.now(timezone.utc)
+                    scan_loc.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
                     file_count = (
                         await db.scalar(
                             select(func.count(MediaFile.id)).where(

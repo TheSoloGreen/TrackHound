@@ -4,12 +4,25 @@ on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
 
 jobs:
   backend-tests:
     name: Backend tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: trackhound
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          POSTGRES_DB: trackhound
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trackhound"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_POSTGRES_URL: postgresql+asyncpg://trackhound:ci-only-postgres-password@localhost:5432/trackhound
     defaults:
       run:
         working-directory: backend
@@ -31,6 +44,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg mediainfo mkvtoolnix
 
       - name: Run backend tests
+        env:
+          TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
         run: python -m pytest -q
 
   frontend-build:
@@ -117,6 +132,14 @@ jobs:
         run: |
           docker compose -f docker-compose.yml config --quiet
           docker compose -f docker-compose.postgres.yml config --quiet
+          for file in docker-compose.yml docker-compose.postgres.yml; do
+            if env -u SECRET_KEY docker compose -f "$file" config --quiet; then
+              exit 1
+            fi
+            if env -u ENCRYPTION_KEY docker compose -f "$file" config --quiet; then
+              exit 1
+            fi
+          done
       - name: Build production image
         run: docker build -t trackhound:test .
       - name: Reject direct image startup with default keys
