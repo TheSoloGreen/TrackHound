@@ -3,6 +3,9 @@
 Branch: `fix/secure-media-editing`  
 Review baseline: `0ce4fa81fd8adc264fbf5b78457ad097939a91e2` on `master`
 
+Draft review: [PR #42](https://github.com/TheSoloGreen/TrackHound/pull/42).
+Implementation is committed and saved on the branch; `master` is unchanged.
+
 ## Project overview
 
 TrackHound scans mounted media files with MediaInfo, stores per-user shows,
@@ -43,6 +46,11 @@ No database migration, image deployment, or merge to `master` is part of this ba
 - Original baseline: 38 backend tests passed; frontend production build passed.
 - Updated local suite: 80 passed, 1 skipped. The skipped test needs native
   MKVToolNix executables, which are unavailable in the editing environment.
+- [CI run 34216958766](https://github.com/TheSoloGreen/TrackHound/actions/runs/34216958766)
+  passed on implementation commit `f6a8c1803f1c2e65de481d5b62513cca6872e134`:
+  **81 backend tests passed**, including the real MKV test. Frontend build and
+  container/Compose validation, secure startup, tool checks, and health smoke test
+  all passed. Image publication was correctly skipped for the draft PR.
 - Frontend: `npm run build` passed (TypeScript and Vite).
 - CI now installs ffmpeg, MediaInfo, and MKVToolNix for a real generated MKV test
   that verifies language selection, default flags, video/subtitle retention, and
