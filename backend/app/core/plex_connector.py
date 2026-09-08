@@ -49,6 +49,7 @@ class PlexConnector:
         self.token = token
         self.server_url = server_url
         self._server = None
+        self._library_loaded = False
         self._shows_cache: dict[str, PlexShow] = {}  # title variant -> show
         self._file_path_cache: dict[str, PlexShow] = {}  # normalized path -> show
         self._shows_by_key: dict[str, PlexShow] = {}  # rating_key -> show
@@ -67,16 +68,16 @@ class PlexConnector:
             
             if self.server_url:
                 # Direct connection to server
-                self._server = PlexServer(self.server_url, self.token)
+                self._server = PlexServer(self.server_url, self.token, timeout=10)
             else:
                 # Auto-discover from account
-                account = MyPlexAccount(token=self.token)
+                account = MyPlexAccount(token=self.token, timeout=10)
                 resources = account.resources()
                 
                 # Find first server
                 for resource in resources:
                     if resource.provides == "server":
-                        self._server = resource.connect()
+                        self._server = resource.connect(timeout=10)
                         break
                 
                 if not self._server:
@@ -231,6 +232,7 @@ class PlexConnector:
                     if folder:
                         self._shows_cache[folder.lower()] = plex_show
         
+        self._library_loaded = library_name is None
         return shows
 
     def _is_anime(self, genres: list[str]) -> bool:
@@ -246,7 +248,7 @@ class PlexConnector:
         This is the most reliable matching method.
         """
         # Ensure cache is populated
-        if not self._file_path_cache:
+        if not self._library_loaded:
             self.get_tv_shows()
         
         normalized = self._normalize_path(file_path)
@@ -276,7 +278,7 @@ class PlexConnector:
         Tries: exact match, original title match, fuzzy match.
         """
         # Ensure cache is populated
-        if not self._shows_cache:
+        if not self._library_loaded:
             self.get_tv_shows()
         
         title_lower = title.lower().strip()
@@ -468,7 +470,7 @@ class PlexConnector:
         
         Useful for debugging matching issues.
         """
-        if not self._shows_cache:
+        if not self._library_loaded:
             self.get_tv_shows()
         
         mappings = {}

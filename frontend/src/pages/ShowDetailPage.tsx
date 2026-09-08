@@ -104,7 +104,7 @@ export default function ShowDetailPage() {
       const response = await mediaApi.getSeason(showId, selectedSeason!)
       return response.data
     },
-    enabled: !!selectedSeason && !isNaN(showId) && show?.media_type !== 'movie',
+    enabled: selectedSeason !== null && !isNaN(showId) && show?.base_media_type !== 'movie',
   })
 
   const rescanFileMutation = useMutation({
@@ -138,7 +138,9 @@ export default function ShowDetailPage() {
     mutationFn: (isAnime: boolean) =>
       mediaApi.updateShow(showId, { is_anime: isAnime, anime_source: isAnime ? 'manual' : undefined }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['show', id] })
+      return Promise.all(['show', 'shows', 'stats', 'files', 'season'].map(
+        (key) => queryClient.invalidateQueries({ queryKey: [key] })
+      ))
     },
   })
 
@@ -162,7 +164,7 @@ export default function ShowDetailPage() {
   }
 
   const badge = MEDIA_TYPE_BADGE[show.media_type] || MEDIA_TYPE_BADGE.tv
-  const isMovie = show.media_type === 'movie'
+  const isMovie = show.base_media_type === 'movie'
 
   function renderSummary() {
     if (isMovie) {
@@ -209,8 +211,7 @@ export default function ShowDetailPage() {
             <RefreshCw className={`w-4 h-4 ${rescanShowMutation.isPending ? 'animate-spin' : ''}`} />
             Rescan Series
           </button>
-          {/* Only show anime toggle for TV shows */}
-          {show.media_type === 'tv' && (
+          {/* Preserve access to unmark after the title moves into the anime category. */}
             <button
               onClick={() => toggleAnimeMutation.mutate(!show.is_anime)}
               disabled={toggleAnimeMutation.isPending}
@@ -220,9 +221,8 @@ export default function ShowDetailPage() {
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300'
               }`}
             >
-              {show.is_anime ? 'Marked as Anime' : 'Mark as Anime'}
+              {show.is_anime ? 'Unmark as Anime' : 'Mark as Anime'}
             </button>
-          )}
         </div>
       </div>
 

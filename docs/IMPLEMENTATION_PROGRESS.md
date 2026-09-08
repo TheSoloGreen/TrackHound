@@ -92,3 +92,18 @@ commands plus backup/upgrade/restore integration tests (#41). Historical fixture
 come from the actual initial and pre-ownership commits. PostgreSQL tests run
 against isolated databases in the CI service. See OPERATIONS.md for the required
 backup and rollback procedure. Later scan and UI issues are still in progress.
+
+## Scan follow-up: fix/scan-correctness
+
+This branch depends on the database PR #43. It honors full scans (#29), loads
+saved extensions and detection settings (#30), safely reconciles missing records
+(#31), and continues local scans when Plex fails (#32). Manual anime overrides
+now control analysis, filters, statistics, and scan-time edits consistently (#37),
+with a migration preserving the underlying movie/TV category. Scan work runs
+outside the request event loop, and status retains a bounded completion record
+for the UI follow-up (#38). See SCANNING.md for precedence and cleanup rules.
+
+Local validation: 118 backend tests passed, 11 integration cases require the CI
+PostgreSQL/native-tool environment. TypeScript and the production build passed.
+The remaining UI PR will cover draft settings saves (#34), production deep links
+(#36), completion/cache updates (#38), and frontend classification regressions.

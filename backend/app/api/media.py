@@ -39,6 +39,7 @@ router = APIRouter()
 
 from app.core.analyzer import AudioAnalyzer, AudioAnalysisError, require_successful_analysis
 from app.core.media_access import get_media_edit_capabilities
+from app.core.classification import classify_show
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import (
     AudioTrackRemovalError,
@@ -544,6 +545,7 @@ async def list_shows(
                 id=show.id,
                 title=show.title,
                 media_type=show.media_type,
+                base_media_type=show.base_media_type,
                 is_anime=show.is_anime,
                 anime_source=show.anime_source,
                 thumb_url=show.thumb_url,
@@ -633,6 +635,7 @@ async def get_show(
         id=show.id,
         title=show.title,
         media_type=show.media_type,
+        base_media_type=show.base_media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
         thumb_url=show.thumb_url,
@@ -664,19 +667,18 @@ async def update_show(
             detail="Title not found",
         )
 
-    if updates.media_type is not None:
-        show.media_type = updates.media_type
-        if updates.media_type == "anime":
-            show.is_anime = True
-        elif updates.media_type in ("tv", "movie"):
-            show.is_anime = False
-    if updates.is_anime is not None:
-        show.is_anime = updates.is_anime
-        if updates.is_anime and not show.anime_source:
-            show.anime_source = "manual"
-    if updates.anime_source is not None:
-        show.anime_source = updates.anime_source
-
+    if updates.media_type is not None or updates.is_anime is not None:
+        base_type = updates.media_type.value if updates.media_type in ("tv", "movie") else show.base_media_type
+        is_anime = updates.is_anime if updates.is_anime is not None else updates.media_type == "anime"
+        classify_show(show, is_anime, "manual", base_type)
+        # Re-evaluate cached tracks immediately; classification does not edit media.
+        engine = PreferenceEngine(await _load_user_audio_preferences(db, current_user.id))
+        files = (await db.scalars(select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(
+            MediaFile.show_id == show.id, MediaFile.user_id == current_user.id))).all()
+        for media_file in files:
+            issues = engine.evaluate([_audio_track_to_dict(track) for track in media_file.audio_tracks], is_anime=show.is_anime)
+            media_file.has_issues = bool(issues)
+            media_file.issue_details = "; ".join(issues) if issues else None
     await db.flush()
 
     # Counts
@@ -711,6 +713,7 @@ async def update_show(
         id=show.id,
         title=show.title,
         media_type=show.media_type,
+        base_media_type=show.base_media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
         thumb_url=show.thumb_url,

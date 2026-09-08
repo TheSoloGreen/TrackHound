@@ -77,6 +77,7 @@ class Show(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(512), nullable=False)
+    base_media_type: Mapped[str] = mapped_column(String(20), default="tv", nullable=False)
     media_type: Mapped[str] = mapped_column(
         String(20), default="tv", nullable=False
     )  # tv, movie, anime
