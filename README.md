@@ -52,11 +52,13 @@ docker compose up -d --build
 ```
 
 Plex sign-in is restricted to the numeric account IDs in `ALLOWED_PLEX_USER_IDS`.
-An empty list denies all accounts. For initial setup, sign in once: the access-denied
-message shows your verified Plex account ID. Add that ID to `.env` (for example,
-`ALLOWED_PLEX_USER_IDS=123456`), then run `docker compose up -d` to recreate the
-container and sign in again. Separate multiple approved IDs with commas. Removing
-an ID and restarting also blocks that account's existing sessions.
+A non-empty list controls both new logins and existing sessions. On a fresh database,
+an empty list allows the first Plex-verified account to claim the instance; from then
+on, only that stored Plex account can sign in or use its existing sessions while the
+list remains empty. To add accounts, set the complete list in `.env` (for example,
+`ALLOWED_PLEX_USER_IDS=123456,789012`) and run `docker compose up -d` to recreate the
+container. Rejected logins show the verified Plex account ID. Removing an ID from a
+configured list and restarting also blocks that account's existing sessions.
 
 The production image refuses to start with default keys or keys shorter than 32
 characters. Existing installations should read the [upgrade and recovery notes](docs/OPERATIONS.md)
@@ -131,7 +133,7 @@ test runs skip the real MKV test if ffmpeg or MKVToolNix is unavailable.
 | `ENVIRONMENT` | `production`, `development`, or `test`; Docker uses `production` | `development` outside Docker |
 | `SECRET_KEY` | Unique JWT signing key, at least 32 characters in production | Required in production |
 | `ENCRYPTION_KEY` | Key for stored Plex tokens; retain it across upgrades and restores | Required in production |
-| `ALLOWED_PLEX_USER_IDS` | Comma-separated numeric Plex account IDs allowed to use this instance | Empty: all accounts denied |
+| `ALLOWED_PLEX_USER_IDS` | Comma-separated numeric Plex account IDs; when empty, a fresh database binds access to its first verified Plex account | Empty: first-user bootstrap/sole stored owner |
 | `MEDIA_WRITES_ENABLED` | Permit MKV edits when the tools and filesystem also allow them | `false` |
 | `CORS_ORIGINS` | Allowed CORS origins | `http://localhost:3000,http://localhost:5173` |
 
