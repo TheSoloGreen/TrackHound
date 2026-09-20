@@ -41,6 +41,12 @@ export interface ScanStatus {
   current_file: string | null
   started_at: string | null
   errors: string[]
+  warnings: string[]
+  error_count: number
+  warning_count: number
+  files_removed: number
+  finished_at: string | null
+  outcome: 'idle' | 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed'
 }
 
 // Audio track types

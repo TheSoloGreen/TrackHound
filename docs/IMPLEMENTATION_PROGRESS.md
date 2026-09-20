@@ -1,109 +1,89 @@
 # TrackHound implementation checkpoint
 
-Branch: `fix/secure-media-editing`  
-Review baseline: `0ce4fa81fd8adc264fbf5b78457ad097939a91e2` on `master`
+Review baseline: `0ce4fa81fd8adc264fbf5b78457ad097939a91e2` on `master`.
+The implementation is split into dependent review branches. Nothing has been
+merged or deployed, and no production database or media has been changed.
 
-Draft review: [PR #42](https://github.com/TheSoloGreen/TrackHound/pull/42).
-Implementation is committed and saved on the branch; `master` is unchanged.
+TrackHound scans mounted media with MediaInfo, stores per-user titles, seasons,
+audio tracks and preference violations in SQLite or PostgreSQL, and uses Plex
+for sign-in and optional metadata. A React interface supports browsing, exports,
+rescans, default-audio changes, and MKV track removal. FastAPI serves the built UI.
 
-## Project overview
+## Review and merge order
 
-TrackHound scans mounted media files with MediaInfo, stores per-user shows,
-seasons, audio tracks, and preference violations in SQLite or PostgreSQL, and
-uses Plex for sign-in and metadata enrichment. Its React/TypeScript interface
-supports filtering, exports, rescans, default-audio changes, and MKV track removal.
-The application is packaged as a single FastAPI container serving the frontend.
+1. [PR #42](https://github.com/TheSoloGreen/TrackHound/pull/42),
+   `fix/secure-media-editing`: authorized access, explicit media-write capability,
+   recoverable MKV edits, language removal plans, and deployment checks.
+2. [PR #43](https://github.com/TheSoloGreen/TrackHound/pull/43),
+   `fix/database-integrity`: transactional historical upgrades, database-enforced
+   ownership and cascades, per-file savepoints, and verified backup/recovery.
+3. [PR #44](https://github.com/TheSoloGreen/TrackHound/pull/44),
+   `fix/scan-correctness`: scan settings/full rescans, Plex fallback, reconciliation,
+   classification consistency, and bounded completion status.
+4. `fix/ui-consistency`: draft preference saves, production deep links, shared
+   cache refresh, persistent scan summaries, and frontend regression tests.
 
-## First implementation batch
+Each follow-up targets the preceding branch to keep its diff focused. After its
+parent merges, retarget the next PR to `master` and check CI before merging.
+Preserve the parent commit ancestry when merging this stack; squash/rebase merges
+require updating dependent branches before proceeding. Historical branches outside
+this sequence have not been combined or removed.
 
-- Restrict Plex login and existing sessions to an administrator-configured account
-  allowlist. Blank configuration denies access. Reject known default and short
-  production keys, including direct use of the published image. Addresses #40.
-- Ship MKVToolNix and make all media writes an explicit instance opt-in. Report
-  live per-file tool, mount, and permission capabilities in the API and UI.
-  Apply the same policy to scan-time automatic edits. Addresses #28.
-- Fix PostgreSQL Compose environment strings and validate both deployment files
-  in CI. Addresses #26.
-- Use the saved keep-language policy for the UI's initial pruning selection.
-  Require the scan revision for explicit track indices and reject changed files.
-  Show the kept and removed tracks in confirmation. Addresses #35.
-- Preserve existing audio metadata on failed or unavailable analysis. Show scan
-  errors and refresh related cached file/show/stat data after file actions.
-  These are partial improvements for #38.
-- Serialize in-process edits, bound native subprocess durations, verify remux
-  output and source stability, protect prior backups, and restore the original
-  after replacement failures. Keep scan discovery away from temporary remux files.
-- Run manual editing and analysis off the request event loop. Broader scan worker
-  changes remain outstanding.
-- Add deployment, key, database-backup, and media-recovery notes in
-  [OPERATIONS.md](OPERATIONS.md), contributing to #41. Automated restore rehearsal
-  and key-rotation tooling remain future work.
+## Existing issue coverage
 
-No database migration, image deployment, or merge to `master` is part of this batch.
+| Issue | Implemented behavior | Review branch |
+| --- | --- | --- |
+| #26 | Valid Compose environment mappings; missing-key and render checks | secure-media-editing + database-integrity |
+| #27 | Transactional, versioned upgrades from actual historical schemas on SQLite/PostgreSQL | database-integrity |
+| #28 | Native MKV tools, opt-in writes, capability responses, backup/restore protection | secure-media-editing |
+| #29 | Full scans reanalyze unchanged files; dashboard exposes a Full scan option | scan-correctness + ui-consistency |
+| #30 | Saved extension and anime detection settings applied with documented precedence | scan-correctness |
+| #31 | Missing-record cleanup only after a complete uncancelled scan; user/root isolation | scan-correctness |
+| #32 | Plex timeout/auth/no-server failures fall back to local analysis with one warning | scan-correctness |
+| #33 | Per-user path uniqueness; a failed file does not poison the scan session | database-integrity |
+| #34 | Immediate local drafts, explicit serialized saves, response cache updates, retained later edits/errors | ui-consistency |
+| #35 | Saved keep-language plans, explicit overrides, exact confirmation and stale-revision rejection | secure-media-editing + ui-consistency tests |
+| #36 | SPA fallback for client routes; API and missing-asset behavior retained | ui-consistency |
+| #37 | Canonical anime category with manual precedence, restored movie/TV origin, refreshed issues/badges/stats | scan-correctness + ui-consistency |
+| #38 | Completion refreshes all library caches; persistent outcomes and bounded expandable messages | scan-correctness + ui-consistency |
+| #39 | Foreign keys on every SQLite connection, orphan cleanup, tested database cascades | database-integrity |
+| #40 | Plex account allowlist enforced on login and authenticated APIs; exposure guidance | secure-media-editing + database-integrity docs |
+| #41 | Consistent SQLite and PostgreSQL backups, rollback instructions, recovery integration tests | database-integrity |
+
+Issues remain open until the corresponding implementation is merged into the
+repository's default branch. Consult PR checks for the latest remote results.
 
 ## Validation
 
-- Original baseline: 38 backend tests passed; frontend production build passed.
-- Updated local suite: 80 passed, 1 skipped. The skipped test needs native
-  MKVToolNix executables, which are unavailable in the editing environment.
-- [CI run 34216958766](https://github.com/TheSoloGreen/TrackHound/actions/runs/34216958766)
-  passed on implementation commit `f6a8c1803f1c2e65de481d5b62513cca6872e134`:
-  **81 backend tests passed**, including the real MKV test. Frontend build and
-  container/Compose validation, secure startup, tool checks, and health smoke test
-  all passed. Image publication was correctly skipped for the draft PR.
-- Frontend: `npm run build` passed (TypeScript and Vite).
-- CI now installs ffmpeg, MediaInfo, and MKVToolNix for a real generated MKV test
-  that verifies language selection, default flags, video/subtitle retention, and
-  byte-for-byte preservation of the original backup.
-- CI also validates both Compose files, builds the production image, rejects
-  insecure direct image configuration, checks editing tools and read-only defaults,
-  and smoke-tests startup and health. Image publishing depends on these checks.
-- Local regression tests cover unauthorized Plex accounts and revoked sessions,
-  stale track choices, read-only paths, symlink escapes, saved language policies,
-  failed probes, successful API metadata refresh, concurrent edits, remux timeout,
-  existing backups, failed replacement, and failed automatic restoration.
+- PR #42 CI: 81 backend tests, real generated MKV editing, frontend build, both
+  Compose files, production startup/health and native-tool checks passed.
+- PR #43 CI: 98 backend tests passed, including historical PostgreSQL upgrades and
+  backup/upgrade/restore. Frontend and container checks also passed.
+- PR #44 local: 118 passed; 11 PostgreSQL/native-tool cases require CI.
+- Final UI branch local: 136 backend tests passed, 11 integration cases require
+  CI; 12 frontend regression tests and the TypeScript/production build passed.
+- CI installs the native tools and PostgreSQL service, runs frontend tests, builds
+  and smoke-tests the production container. Draft PRs do not publish images.
 
-Run from `backend`: `python -m pytest -q`. Run from `frontend`: `npm ci && npm run build`.
-Consult the PR checks for native-tool and container results; those cannot run in
-the local editing environment.
+Commands: `cd backend && python -m pytest -q`;
+`cd frontend && npm ci && npm test && npm run build`.
 
-## Remaining work, in suggested order
+## Before upgrading
 
-| Area | Work and existing issue |
-| --- | --- |
-| Database correctness | Introduce versioned migrations and upgrade tests (#27); scope file-path uniqueness per user and recover failed scan transactions (#33); enable and verify SQLite foreign keys (#39). |
-| Scan correctness | Honor full vs incremental scans (#29), saved extension/anime settings (#30), and reconcile deleted files only after successful discovery (#31). |
-| Scan resilience | Make Plex failures degrade to local metadata (#32); move synchronous scan probes, Plex calls, and filesystem work out of the async request loop; use durable job state and shared edit coordination before adding workers. |
-| Settings | Replace saves on every keystroke with a draft and explicit save or serialized partial updates (#34). |
-| Classification | Apply manual anime overrides consistently, including before scan-time auto-fixes (#37). |
-| Frontend consistency | Finish scan-completion cache invalidation and durable error reporting (#38); add SPA fallback for direct navigation to nested routes (#36). |
-| Operations | Rehearse database restore and build controlled key rotation (#41); document tested upgrade paths and pin release dependencies. |
+Follow [OPERATIONS.md](OPERATIONS.md): back up the database with its matching
+`ENCRYPTION_KEY`; retain valid keys; configure `ALLOWED_PLEX_USER_IDS`. Blank
+allowlists deny access. Editing stays disabled until explicitly enabled with
+writable media permissions. Schema rollback requires a matching backup and app
+version, rather than an unsafe destructive downgrade.
 
-Existing issues are at `https://github.com/TheSoloGreen/TrackHound/issues/<number>`.
-When resuming, inspect the branch and PR checks first, preserve completed work,
-then select the next bounded batch from this table.
+See [SCANNING.md](SCANNING.md) for exact detection, overlap, missing-file and
+cancellation rules. In Settings, edit preferences locally and choose **Save
+preferences**. Inputs remain editable during a save; newer changes need another
+save after the first finishes. Run a **Full scan** to apply new scan preferences
+to unchanged files. Location actions save individually.
 
-## Database follow-up: fix/database-integrity
-
-This branch depends on fix/secure-media-editing and adds the versioned historical
-upgrade path (#27), per-user file uniqueness and per-file savepoints (#33),
-SQLite foreign-key enforcement with orphan cleanup (#39), and consistent backup
-commands plus backup/upgrade/restore integration tests (#41). Historical fixtures
-come from the actual initial and pre-ownership commits. PostgreSQL tests run
-against isolated databases in the CI service. See OPERATIONS.md for the required
-backup and rollback procedure. Later scan and UI issues are still in progress.
-
-## Scan follow-up: fix/scan-correctness
-
-This branch depends on the database PR #43. It honors full scans (#29), loads
-saved extensions and detection settings (#30), safely reconciles missing records
-(#31), and continues local scans when Plex fails (#32). Manual anime overrides
-now control analysis, filters, statistics, and scan-time edits consistently (#37),
-with a migration preserving the underlying movie/TV category. Scan work runs
-outside the request event loop, and status retains a bounded completion record
-for the UI follow-up (#38). See SCANNING.md for precedence and cleanup rules.
-
-Local validation: 118 backend tests passed, 11 integration cases require the CI
-PostgreSQL/native-tool environment. TypeScript and the production build passed.
-The remaining UI PR will cover draft settings saves (#34), production deep links
-(#36), completion/cache updates (#38), and frontend classification regressions.
+Continue to use one worker/container per media library. Restart-resumable jobs,
+shared multi-worker edit locks, and controlled encryption-key rotation remain
+future improvements; they are outside the acceptance criteria of issues #26–41.
+The latest scan summary survives navigation and completion, but resets on the
+next scan or application restart.

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import PreferencesForm from '../components/PreferencesForm'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, FolderOpen, ChevronRight, Folder } from 'lucide-react'
 import { settingsApi, scanApi, mediaApi } from '../api/client'
@@ -155,18 +156,6 @@ export default function SettingsPage() {
     },
   })
 
-  // Update settings mutation
-  const updateSettings = useMutation({
-    mutationFn: (data: Partial<UserSettings>) => settingsApi.update(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] })
-      queryClient.invalidateQueries({ queryKey: ['trackRemovalPlan'] })
-    },
-    onError: () => {
-      queryClient.invalidateQueries({ queryKey: ['settings'] })
-    },
-  })
-
   // Location mutations
   const addLocation = useMutation({
     mutationFn: (data: { path: string; label: string; media_type: string }) =>
@@ -244,7 +233,9 @@ export default function SettingsPage() {
               >
                 <input
                   type="checkbox"
+                  aria-label={`Enable ${loc.label}`}
                   checked={loc.enabled}
+                  disabled={toggleLocation.isPending}
                   onChange={(e) => toggleLocation.mutate({ id: loc.id, enabled: e.target.checked })}
                   className="w-4 h-4 text-orange-500 rounded"
                 />
@@ -257,6 +248,8 @@ export default function SettingsPage() {
                 </span>
                 <span className="text-sm text-gray-500">{loc.file_count} files</span>
                 <button
+                  aria-label={`Delete ${loc.label}`}
+                  disabled={deleteLocation.isPending}
                   onClick={() => deleteLocation.mutate(loc.id)}
                   className="p-1 text-red-500 hover:text-red-700"
                 >
@@ -324,269 +317,8 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* Audio Preferences */}
-      <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-          Audio Preferences
-        </h2>
-
-        <div className="space-y-4">
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.audio_preferences.require_english_non_anime ?? true}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  audio_preferences: {
-                    ...settings.audio_preferences,
-                    require_english_non_anime: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Require English audio for non-anime
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag files missing English audio track
-              </p>
-            </div>
-          </label>
-
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.audio_preferences.require_japanese_anime ?? true}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  audio_preferences: {
-                    ...settings.audio_preferences,
-                    require_japanese_anime: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Require Japanese audio for anime
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag anime files missing Japanese audio track
-              </p>
-            </div>
-          </label>
-
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.audio_preferences.require_dual_audio_anime ?? true}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  audio_preferences: {
-                    ...settings.audio_preferences,
-                    require_dual_audio_anime: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Require dual audio for anime
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag anime files without both English and Japanese audio
-              </p>
-            </div>
-          </label>
-
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.audio_preferences.check_default_track ?? true}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  audio_preferences: {
-                    ...settings.audio_preferences,
-                    check_default_track: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Check default audio track
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag if default track isn't the preferred language
-              </p>
-            </div>
-          </label>
-
-
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.audio_preferences.auto_fix_english_default_non_anime ?? false}
-              disabled={!editCapabilities?.set_default_audio}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  audio_preferences: {
-                    ...settings.audio_preferences,
-                    auto_fix_english_default_non_anime: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Auto-fix default to English (non-anime)
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {editCapabilities?.default_audio_reason || 'Automatically set English as default during scans for writable non-anime MKV files.'}
-              </p>
-            </div>
-          </label>
-
-          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Default audio tracks to keep when removing tracks
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Used by the removal tool when you do not manually override track selection. UND stays enabled by default because it can be mislabeled English.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-4">
-              {[
-                { value: 'en', label: 'English' },
-                { value: 'und', label: 'Undefined / UND' },
-                { value: 'ja', label: 'Japanese' },
-              ].map((option) => {
-                const keepLanguages = settings?.audio_preferences.audio_track_keep_languages ?? ['en', 'und']
-                const checked = keepLanguages.includes(option.value)
-                return (
-                  <label key={option.value} className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={(e) => {
-                        if (!settings) return
-                        const current = new Set(settings.audio_preferences.audio_track_keep_languages ?? ['en', 'und'])
-                        if (e.target.checked) {
-                          current.add(option.value)
-                        } else {
-                          current.delete(option.value)
-                        }
-                        updateSettings.mutate({
-                          audio_preferences: {
-                            ...settings.audio_preferences,
-                            audio_track_keep_languages: [...current],
-                          },
-                        })
-                      }}
-                      className="w-4 h-4 text-orange-500 rounded"
-                    />
-                    {option.label}
-                  </label>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Anime Detection */}
-      <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-          Anime Detection
-        </h2>
-
-        <div className="space-y-4">
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={settings?.anime_detection.use_plex_genres ?? true}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  anime_detection: {
-                    ...settings.anime_detection,
-                    use_plex_genres: e.target.checked,
-                  },
-                })
-              }}
-              className="w-4 h-4 text-orange-500 rounded"
-            />
-            <div>
-              <span className="font-medium text-gray-900 dark:text-white">
-                Use Plex genres
-              </span>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Auto-detect anime from Plex genre tags
-              </p>
-            </div>
-          </label>
-
-          <div>
-            <label className="block font-medium text-gray-900 dark:text-white mb-2">
-              Anime folder keywords
-            </label>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-              Paths containing these words will be marked as anime
-            </p>
-            <input
-              type="text"
-              value={settings?.anime_detection.anime_folder_keywords.join(', ') ?? ''}
-              onChange={(e) => {
-                if (!settings) return
-                updateSettings.mutate({
-                  anime_detection: {
-                    ...settings.anime_detection,
-                    anime_folder_keywords: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-                  },
-                })
-              }}
-              placeholder="anime, animation"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* File Extensions */}
-      <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-          File Extensions
-        </h2>
-
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-            File extensions to scan (comma-separated)
-          </p>
-          <input
-            type="text"
-            value={settings?.file_extensions.join(', ') ?? ''}
-            onChange={(e) =>
-              updateSettings.mutate({
-                file_extensions: e.target.value.split(',').map((s) => s.trim()).filter(Boolean),
-              })
-            }
-            placeholder=".mkv, .mp4, .avi"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-          />
-        </div>
-      </section>
+      {settings ? <PreferencesForm initialSettings={settings} editCapabilities={editCapabilities} />
+        : <p role="alert">Could not load preferences. Refresh the page to try again.</p>}
     </div>
   )
 }
