@@ -91,7 +91,7 @@ class Settings(BaseSettings):
 
     @property
     def allowed_plex_user_ids_set(self) -> set[str]:
-        """An empty allowlist deliberately grants no account access."""
+        """Return configured IDs; empty activates database-bound first-user policy."""
         return set(filter(None, self.allowed_plex_user_ids.split(",")))
 
     @property

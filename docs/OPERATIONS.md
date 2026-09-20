@@ -11,10 +11,13 @@
    access limited to the administrator; do not commit `.env` or backups to Git.
 3. Keep existing non-default `SECRET_KEY` and `ENCRYPTION_KEY` values if each is
    at least 32 characters. The production image now rejects weaker values.
-4. Configure `ALLOWED_PLEX_USER_IDS`. If the ID is unknown, the Plex login denial
-   shows the account ID after Plex verifies that account. Add the ID and recreate
-   the container. An empty list deliberately grants no access, and removing an
-   account also blocks its existing sessions after restart.
+4. Prefer configuring `ALLOWED_PLEX_USER_IDS` with the numeric IDs of every account
+   permitted to use the instance. A non-empty list is authoritative for new logins
+   and existing sessions; removing an ID and recreating the container revokes it.
+   On a truly new database only, an empty list lets the first Plex-verified account
+   become the sole owner. After that, an empty list accepts only that same stored
+   Plex account and rejects every other account. A denial includes the verified
+   Plex account ID so an administrator can add it to the configured list.
 5. Keep `MEDIA_WRITES_ENABLED=false` while verifying startup, sign-in, and scans.
    Explicitly enable writes and writable media mounts only for libraries you
    intend TrackHound to edit.
@@ -45,7 +48,9 @@ Verify their Plex connection before starting another scan.
 The allowlist applies equally to development and production. All approved users
 can use the instance's mounted media, subject to its filesystem permissions and
 write policy. It is an instance access restriction, not a per-library permissions
-system.
+system. Do not rely on empty-list bootstrap to add another account: configure a
+non-empty list before inviting additional users. Restoring a database also restores
+its bootstrap owner; an empty list does not transfer ownership to the next login.
 
 ## Media edits and recovery
 

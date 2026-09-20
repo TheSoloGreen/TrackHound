@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import JWTError, jwt
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -44,16 +44,59 @@ def create_access_token(user_id: int) -> str:
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
-def require_allowed_plex_user(plex_user_id: str) -> None:
-    """Apply instance authorization to new logins and existing sessions."""
-    if plex_user_id not in settings.allowed_plex_user_ids_set:
+def reject_plex_user(plex_user_id: str) -> None:
+    """Reject an account while preserving its verified Plex ID for operators."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            "This Plex account is not approved for this TrackHound instance. "
+            f"Ask the administrator to allow Plex account ID {plex_user_id}."
+        ),
+    )
+
+
+def require_configured_plex_user(plex_user_id: str) -> bool:
+    """Apply a configured allowlist, returning false when bootstrap policy applies."""
+    allowed_ids = settings.allowed_plex_user_ids_set
+    if not allowed_ids:
+        return False
+    if plex_user_id not in allowed_ids:
+        reject_plex_user(plex_user_id)
+    return True
+
+
+async def require_session_plex_user(plex_user_id: str, db: AsyncSession) -> None:
+    """Authorize a JWT session against the allowlist or sole bootstrap owner."""
+    if require_configured_plex_user(plex_user_id):
+        return
+    user_count = await db.scalar(select(func.count(User.id)))
+    if user_count != 1:
+        reject_plex_user(plex_user_id)
+
+
+async def lock_bootstrap_transaction(db: AsyncSession) -> None:
+    """Serialize empty-allowlist ownership decisions on supported databases."""
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        if not db.in_transaction():
+            await db.connection(execution_options={"sqlite_transaction_mode": "IMMEDIATE"})
+    elif dialect == "postgresql":
+        await db.execute(text("LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE"))
+    else:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "This Plex account is not approved for this TrackHound instance. "
-                f"Ask the administrator to allow Plex account ID {plex_user_id}."
-            ),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="First-user bootstrap is unavailable for this database backend.",
         )
+
+
+async def require_login_plex_user(plex_user_id: str, db: AsyncSession) -> None:
+    """Authorize login and serialize first-user ownership when no list is set."""
+    if require_configured_plex_user(plex_user_id):
+        return
+    await lock_bootstrap_transaction(db)
+    existing_ids = (await db.scalars(select(User.plex_user_id))).all()
+    if existing_ids and existing_ids != [plex_user_id]:
+        reject_plex_user(plex_user_id)
 
 
 async def get_current_user(
@@ -87,7 +130,7 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
-    require_allowed_plex_user(user.plex_user_id)
+    await require_session_plex_user(user.plex_user_id, db)
     return user
 
 
@@ -188,7 +231,7 @@ async def complete_plex_login(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Failed to get user ID from Plex",
             )
-        require_allowed_plex_user(plex_user_id)
+        await require_login_plex_user(plex_user_id, db)
         plex_username = plex_user.get("username", plex_user.get("title", "Unknown"))
         plex_email = plex_user.get("email")
         plex_thumb = plex_user.get("thumb")

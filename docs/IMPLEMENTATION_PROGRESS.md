@@ -71,10 +71,12 @@ Commands: `cd backend && python -m pytest -q`;
 ## Before upgrading
 
 Follow [OPERATIONS.md](OPERATIONS.md): back up the database with its matching
-`ENCRYPTION_KEY`; retain valid keys; configure `ALLOWED_PLEX_USER_IDS`. Blank
-allowlists deny access. Editing stays disabled until explicitly enabled with
-writable media permissions. Schema rollback requires a matching backup and app
-version, rather than an unsafe destructive downgrade.
+`ENCRYPTION_KEY`; retain valid keys; configure `ALLOWED_PLEX_USER_IDS`. On a fresh
+database, a blank allowlist securely claims the first verified Plex account and
+then permits only that stored owner; a non-empty allowlist remains authoritative.
+Editing stays disabled until explicitly enabled with writable media permissions.
+Schema rollback requires a matching backup and app version, rather than an unsafe
+destructive downgrade.
 
 See [SCANNING.md](SCANNING.md) for exact detection, overlap, missing-file and
 cancellation rules. In Settings, edit preferences locally and choose **Save

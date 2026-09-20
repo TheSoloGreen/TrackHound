@@ -1,5 +1,6 @@
 """Production configuration and authorization at the Plex trust boundary."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import httpx
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.api import auth
 from app.config import Settings, _INSECURE_DEFAULT_KEY, _INSECURE_DEFAULT_ENCRYPTION_KEY
 from app.models.entities import Base, User
+from app.models.engine import create_database_engine
 
 
 @pytest.mark.parametrize("field,bad_value", [
@@ -56,42 +58,156 @@ async def db():
     await engine.dispose()
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("allowed", ["", "456", "123"])
-async def test_plex_login_requires_instance_authorization(monkeypatch, db, allowed):
-    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", allowed)
+def mock_plex_login(monkeypatch, *, plex_user_id="123"):
+    """Return a verified Plex account from the two callback API requests."""
     plex = AsyncMock()
     plex.get.side_effect = [
         httpx.Response(200, json={"authToken": "synthetic-plex-token"}),
-        httpx.Response(200, json={"id": 123, "username": "approved-user"}),
+        httpx.Response(200, json={"id": plex_user_id, "username": "verified-user"}),
     ]
     context = AsyncMock()
     context.__aenter__.return_value = plex
     monkeypatch.setattr(auth.httpx, "AsyncClient", lambda: context)
 
-    if allowed == "123":
-        response = await auth.complete_plex_login(pin_id=1, db=db)
-        assert response.access_token
-        user = (await db.execute(select(User))).scalar_one()
-        assert user.plex_user_id == "123"
-        assert user.plex_token.startswith("enc::")
-    else:
-        with pytest.raises(HTTPException) as exc:
-            await auth.complete_plex_login(pin_id=1, db=db)
-        assert exc.value.status_code == 403
-        assert "123" in exc.value.detail  # Safe first-install account discovery.
-        assert await db.scalar(select(func.count(User.id))) == 0
+
+@pytest.mark.asyncio
+async def test_configured_allowlist_remains_authoritative_for_login(monkeypatch, db):
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "456")
+    mock_plex_login(monkeypatch, plex_user_id="123")
+
+    with pytest.raises(HTTPException) as exc:
+        await auth.complete_plex_login(pin_id=1, db=db)
+
+    assert exc.value.status_code == 403
+    assert "123" in exc.value.detail
+    assert await db.scalar(select(func.count(User.id))) == 0
 
 
 @pytest.mark.asyncio
-async def test_removing_allowlist_entry_revokes_existing_session(monkeypatch, db):
+async def test_configured_allowlist_accepts_listed_account(monkeypatch, db):
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "123")
+    mock_plex_login(monkeypatch, plex_user_id="123")
+
+    response = await auth.complete_plex_login(pin_id=1, db=db)
+
+    assert response.access_token
+    assert await db.scalar(select(func.count(User.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_allowlist_bootstraps_first_verified_plex_account(monkeypatch, db):
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+    mock_plex_login(monkeypatch, plex_user_id="123")
+
+    response = await auth.complete_plex_login(pin_id=1, db=db)
+
+    assert response.access_token
+    user = (await db.execute(select(User))).scalar_one()
+    assert user.plex_user_id == "123"
+    assert user.plex_token.startswith("enc::")
+
+
+@pytest.mark.asyncio
+async def test_empty_allowlist_allows_bootstrapped_account_to_log_back_in(monkeypatch, db):
+    db.add(User(plex_user_id="123", plex_username="original", plex_token="test"))
+    await db.flush()
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+    mock_plex_login(monkeypatch, plex_user_id="123")
+
+    response = await auth.complete_plex_login(pin_id=1, db=db)
+
+    assert response.access_token
+    assert await db.scalar(select(func.count(User.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_allowlist_rejects_second_verified_plex_account(monkeypatch, db):
+    db.add(User(plex_user_id="123", plex_username="owner", plex_token="test"))
+    await db.flush()
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+    mock_plex_login(monkeypatch, plex_user_id="456")
+
+    with pytest.raises(HTTPException) as exc:
+        await auth.complete_plex_login(pin_id=1, db=db)
+
+    assert exc.value.status_code == 403
+    assert "456" in exc.value.detail
+    assert await db.scalar(select(func.count(User.id))) == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_allowlist_preserves_bootstrapped_users_existing_session(monkeypatch, db):
+    user = User(plex_user_id="123", plex_username="owner", plex_token="test")
+    db.add(user)
+    await db.flush()
+    credentials = HTTPAuthorizationCredentials(
+        scheme="Bearer", credentials=auth.create_access_token(user.id)
+    )
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+
+    assert await auth.get_current_user(credentials, db) is user
+
+
+@pytest.mark.asyncio
+async def test_concurrent_empty_allowlist_bootstrap_creates_only_one_owner(monkeypatch, tmp_path):
+    database = create_database_engine(f"sqlite+aiosqlite:///{tmp_path / 'bootstrap.db'}")
+    async with database.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(database, expire_on_commit=False)
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+
+    class PlexClient:
+        def __init__(self):
+            self.token = None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, headers):
+            if url.startswith(auth.PLEX_PINS_URL + "/"):
+                pin_id = url.rsplit("/", 1)[-1]
+                self.token = f"token-{pin_id}"
+                return httpx.Response(200, json={"authToken": self.token})
+            plex_user_id = "123" if self.token == "token-1" else "456"
+            return httpx.Response(200, json={"id": plex_user_id, "username": plex_user_id})
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", PlexClient)
+    ready = asyncio.Event()
+
+    async def attempt(pin_id):
+        async with sessions() as session:
+            await ready.wait()
+            try:
+                await auth.complete_plex_login(pin_id=pin_id, db=session)
+                await session.commit()
+                return "accepted"
+            except HTTPException as exc:
+                await session.rollback()
+                return exc.status_code
+
+    tasks = [asyncio.create_task(attempt(pin_id)) for pin_id in (1, 2)]
+    ready.set()
+    outcomes = await asyncio.gather(*tasks)
+
+    async with sessions() as session:
+        owners = (await session.execute(select(User.plex_user_id))).scalars().all()
+    await database.dispose()
+    assert sorted(outcomes, key=str) == [403, "accepted"]
+    assert len(owners) == 1
+
+
+@pytest.mark.asyncio
+async def test_configured_allowlist_revokes_existing_session(monkeypatch, db):
     user = User(plex_user_id="123", plex_username="user", plex_token="test")
     db.add(user)
     await db.flush()
     credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth.create_access_token(user.id))
     monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "123")
     assert await auth.get_current_user(credentials, db) is user
-    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "")
+    monkeypatch.setattr(auth.settings, "allowed_plex_user_ids", "456")
     with pytest.raises(HTTPException) as exc:
         await auth.get_current_user(credentials, db)
     assert exc.value.status_code == 403
