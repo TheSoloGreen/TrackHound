@@ -1,3 +1,4 @@
+import AuthenticationSettings from '../components/AuthenticationSettings'
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { apiError } from '../api/errors'
@@ -219,6 +220,8 @@ export default function SettingsPage() {
           Configure scan locations and audio preferences
         </p>
       </div>
+
+      <AuthenticationSettings />
 
       {/* Scan Locations */}
       <section className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">

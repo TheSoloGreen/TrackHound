@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
+import BuildVersion from './BuildVersion'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -25,7 +26,7 @@ const navItems = [
 
 export default function Layout({ children }: LayoutProps) {
   useScanStatus()
-  const { user, logout } = useAuth()
+  const { user, logout, authRequired } = useAuth()
   const navigate = useNavigate()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
@@ -87,14 +88,14 @@ export default function Layout({ children }: LayoutProps) {
                   {user?.username || user?.plex_username}
                 </span>
               </div>
-              <button
+              {authRequired !== false && <button
                 onClick={handleLogout}
                 className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
                 title="Logout"
                 aria-label="Logout"
               >
                 <LogOut className="w-5 h-5" />
-              </button>
+              </button>}
 
               {/* Mobile menu button */}
               <button
@@ -137,6 +138,7 @@ export default function Layout({ children }: LayoutProps) {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {children}
       </main>
+      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6 text-xs text-gray-500 dark:text-gray-400"><BuildVersion /></footer>
     </div>
   )
 }

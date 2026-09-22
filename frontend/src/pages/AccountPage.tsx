@@ -5,7 +5,7 @@ import { apiError } from '../api/errors'
 import { isAxiosError } from 'axios'
 
 export default function AccountPage() {
-  const { user, login } = useAuth()
+  const { user, login, authRequired } = useAuth()
   const [username, setUsername] = useState(user?.username || '')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -63,20 +63,21 @@ export default function AccountPage() {
   const required = user?.must_change_password || !user?.has_local_password
   const inputClass = 'block w-full mt-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2'
   return <section className="max-w-xl space-y-5">
-    <h1 className="text-2xl font-bold">Account</h1>
-    {user?.must_change_password && <p role="alert">Change your initial password before using TrackHound. You can also rename the admin account.</p>}
+<h1 className="text-2xl font-bold">Account</h1>
+    {authRequired === false && <p>Login is currently disabled. Saving credentials here does not enable it; choose Require login in Settings when you want it.</p>}
+    {authRequired !== false && user?.must_change_password && <p role="alert">Change your initial password before using TrackHound. You can also rename the admin account.</p>}
     {error && <p role="alert" className="text-red-600 dark:text-red-400">{error}</p>}
     {message && <p role="status">{message}</p>}
     <form onSubmit={save} className="space-y-4">
       <label className="block">Username<input className={inputClass} autoComplete="username" required minLength={3} maxLength={64} pattern="[a-zA-Z0-9_.\-]+" value={username} onChange={e => setUsername(e.target.value)} disabled={busy} /></label>
       <p className="text-sm text-gray-500">3–64 letters, numbers, dots, underscores, or hyphens. Sign-in is case-insensitive.</p>
-      {user?.has_local_password && <label className="block">Current password<input className={inputClass} type="password" autoComplete="current-password" required maxLength={128} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} disabled={busy} /></label>}
+      {authRequired !== false && user?.has_local_password && <label className="block">Current password<input className={inputClass} type="password" autoComplete="current-password" required maxLength={128} value={currentPassword} onChange={e => setCurrentPassword(e.target.value)} disabled={busy} /></label>}
       <label className="block">New password<input className={inputClass} type="password" autoComplete="new-password" required={required} minLength={12} maxLength={128} value={newPassword} onChange={e => setNewPassword(e.target.value)} disabled={busy} /></label>
       <label className="block">Confirm new password<input className={inputClass} type="password" autoComplete="new-password" required={required || !!newPassword} value={confirmation} onChange={e => setConfirmation(e.target.value)} disabled={busy} /></label>
       <p className="text-sm text-gray-500">Use at least 12 characters. {required ? '' : 'Leave the new password blank to keep your current password.'}</p>
       <button disabled={busy} className="rounded bg-orange-600 px-4 py-2 text-white disabled:opacity-50">{busy ? 'Please wait…' : 'Save account'}</button>
     </form>
-    {!user?.must_change_password && <div className="border-t pt-4 space-y-2">
+    {(authRequired === false || !user?.must_change_password) && <div className="border-t pt-4 space-y-2">
       <h2 className="font-semibold">Optional Plex connection</h2>
       <p>{user?.plex_connected ? 'Plex is connected. You can sign in with either method.' : 'Connect Plex to use its metadata and sign in to this same library with Plex.'}</p>
       <button disabled={busy} onClick={connectPlex} className="rounded border px-4 py-2 disabled:opacity-50">{user?.plex_connected ? 'Reconnect Plex' : 'Connect Plex'}</button>

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Link, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { beforeEach, expect, it, vi } from 'vitest'
 import axe from 'axe-core'
-import { mediaApi, scanApi, settingsApi } from '../api/client'
+import { authApi, mediaApi, scanApi, settingsApi } from '../api/client'
 import { apiError } from '../api/errors'
 import FilesPage from '../pages/FilesPage'
 import SettingsPage from '../pages/SettingsPage'
@@ -11,6 +11,7 @@ import { mediaFile, renderWithClient, settings } from './helpers'
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  vi.spyOn(authApi, "getConfig").mockResolvedValue({ data: { mode: "none" } } as never)
   vi.spyOn(mediaApi, 'getFiles').mockResolvedValue({ data: { items: [mediaFile], total: 1, pages: 1 } } as never)
   vi.spyOn(mediaApi, 'getAudioTrackRemovalPlan').mockResolvedValue({ data: { file_id: 1, last_scanned: mediaFile.last_scanned, keep_track_indices: [1] } } as never)
 })

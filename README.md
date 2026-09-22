@@ -51,41 +51,44 @@ docker compose up -d --build
 # Access at http://localhost:8383
 ```
 
-### Local login and optional Plex
+### Authentication and shared access
 
-After the first startup of this version, sign in as **admin** using the generated
-password in `/app/data/initial-admin-password`. With the default SQLite container:
+Authentication defaults to **None**. Open TrackHound to go directly to the shared
+library; no username, password, or Plex sign-in is needed. This also applies the
+first time an older installation upgrades to this version. Existing credentials
+and media records are retained. A single existing account keeps its library; on
+multi-user upgrades the first local account is used for shared access (or a new
+local account is created if there is no local account). Other catalogs are not
+merged or reassigned.
 
-```bash
-docker exec trackhound cat /app/data/initial-admin-password
-```
+In **Settings → Authentication**, choose **Require login** and set the username
+and password you want to use. Passwords require 12–128 characters. Saving enables
+login immediately and takes you to the sign-in page, where local credentials and
+Plex are both available. Once enabled, only the instance owner can change the
+mode. Choose **None** again to remove the login requirement. Anyone who can reach
+the instance can use its shared library and settings while None is selected.
 
-For the PostgreSQL Compose example, use container `trackhound-pro`. The password
-is unique to your installation, stored with owner-only file permissions, and is
-never printed in application logs. Change it at first login on **Account**; you
-can rename `admin` there too. Later use **Settings → Manage username, password,
-and Plex connection**. Passwords require 12–128 characters and are stored as
-salted scrypt hashes. Changing credentials signs out other sessions.
+The selected mode persists across restarts and updates; resetting audio/scan
+preferences does not reset it. Enabling or disabling login invalidates the
+owner's previous sessions. Account settings can update local credentials or
+connect Plex without changing the mode. Connect Plex from Account to use that
+same library through Plex sign-in; unlinked Plex identities retain separate
+accounts. Local scanning works without a Plex connection.
 
-On an existing single-user installation, local credentials are added to the same
-Plex account, preserving its library and settings. With multiple existing Plex
-users, a separate local account is created; no user's catalog is reassigned.
-Plex-only users can add local credentials from Account after signing in with Plex.
-Restarts do not reset credentials. The initial password file becomes obsolete
-once you change the password; changing that file does not reset an existing account.
+### Confirming a container update
 
-Plex is optional for local scanning. To use both login methods with the same
-library on a fresh installation, sign in locally first, change the initial
-password, then choose **Connect Plex** on Account. Signing in with an unlinked
-Plex identity creates its own account subject to the Plex policy below; accounts
-are never automatically merged. For local development, the password file defaults
-to `./data/initial-admin-password`; `INITIAL_ADMIN_PASSWORD_FILE` can override it.
-Keep the data directory writable and private. Use HTTPS when accessing the
-instance beyond a trusted local network.
+The footer on every page, including Login, displays the running server's version
+and build revision, for example `TrackHound v0.2.0 · abc123def456`. Hover over the
+label for the full revision. `/api/info` returns the same values without caching;
+`/api/health` also includes them. Published images embed the Git commit of the
+merged build, so successive builds are distinguishable even within one release.
+Local builds show `development` unless you pass
+`docker build --build-arg BUILD_REVISION=$(git rev-parse HEAD) -t trackhound .`.
 
 Plex sign-in is restricted to the numeric account IDs in `ALLOWED_PLEX_USER_IDS`.
 A non-empty list controls both new Plex logins and existing Plex sessions.
-Local password authentication is independent of this list. On a fresh database,
+Local password authentication is independent of this list. With authentication
+set to None, the shared account is available without either login method. On a fresh database,
 an empty list allows the first Plex-verified account to claim the instance; from then
 on, only that stored Plex account can sign in or use its existing sessions while the
 list remains empty. To add accounts, set the complete list in `.env` (for example,

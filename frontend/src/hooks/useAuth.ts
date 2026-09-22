@@ -7,13 +7,17 @@ export function useAuth() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'))
   const queryClient = useQueryClient()
 
+  const policy = useQuery({ queryKey: ['authConfig'], queryFn: async () => (await authApi.getConfig()).data,
+    retry: false, staleTime: 0, refetchInterval: 15000 })
+  const authRequired = policy.data?.mode !== 'none'
+
   const { data: user, isLoading, error } = useQuery<User>({
     queryKey: ['currentUser'],
     queryFn: async () => {
       const response = await authApi.getCurrentUser()
       return response.data
     },
-    enabled: !!token,
+    enabled: !!policy.data && (!!token || !authRequired),
     retry: false,
   })
 
@@ -54,9 +58,10 @@ export function useAuth() {
 
   return {
     user,
-    isAuthenticated: !!token && !!user,
-    isLoading: isLoading && !!token,
-    error,
+    isAuthenticated: !!user && (!authRequired || !!token),
+    authRequired,
+    isLoading: policy.isLoading || (isLoading && (!!token || !authRequired)),
+    error: policy.error || error,
     login,
     logout,
   }

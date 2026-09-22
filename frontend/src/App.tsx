@@ -10,7 +10,7 @@ import FilesPage from './pages/FilesPage'
 import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading, user } = useAuth()
+  const { isAuthenticated, isLoading, user, authRequired } = useAuth()
   const location = useLocation()
 
   if (isLoading) {
@@ -25,7 +25,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />
   }
 
-  if (user?.must_change_password && location.pathname !== "/account") return <Navigate to="/account" replace />
+  if (authRequired !== false && user?.must_change_password && location.pathname !== "/account") return <Navigate to="/account" replace />
 
   return <>{children}</>
 }

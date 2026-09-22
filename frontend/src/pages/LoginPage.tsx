@@ -4,6 +4,7 @@ import { Tv, Loader2 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { authApi } from '../api/client'
 import { isAxiosError } from 'axios'
+import BuildVersion from '../components/BuildVersion'
 import { apiError } from '../api/errors'
 
 export default function LoginPage() {
@@ -183,7 +184,7 @@ export default function LoginPage() {
           </p>
         )}
 
-        <p className="mt-5 text-xs text-gray-500">First login: use admin and the password in your server's data/initial-admin-password file. You will be asked to change it.</p>
+        <p className="mt-5 text-xs text-gray-500 text-center"><BuildVersion /></p>
 
         {/* Features */}
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">

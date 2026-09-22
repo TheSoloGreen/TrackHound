@@ -36,6 +36,9 @@ RUN groupadd --gid 1000 appuser && \
 USER appuser
 
 # Environment
+ARG BUILD_REVISION=development
+ENV BUILD_REVISION=${BUILD_REVISION}
+LABEL org.opencontainers.image.revision=${BUILD_REVISION}
 ENV PYTHONUNBUFFERED=1 ENVIRONMENT=production MEDIA_WRITES_ENABLED=false
 
 EXPOSE 8000
