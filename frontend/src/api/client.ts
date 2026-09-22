@@ -24,7 +24,10 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const currentToken = localStorage.getItem('token')
+    // A request started before credential rotation must not discard the new session.
+    if (error.response?.status === 401 && currentToken &&
+        error.config?.headers?.Authorization === `Bearer ${currentToken}`) {
       localStorage.removeItem('token')
       // Dispatch storage event so useAuth picks up the change
       window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: null }))
@@ -35,6 +38,9 @@ api.interceptors.response.use(
 
 // Auth API
 export const authApi = {
+  passwordLogin: (username: string, password: string) => api.post<{ access_token: string }>('/api/auth/login', { username, password }),
+  updateAccount: (data: { username: string; current_password: string; new_password?: string }) => api.put<{ access_token: string }>('/api/auth/account', data),
+  linkPlex: (pinId: number) => api.post<{ access_token: string }>(`/api/auth/plex/link?pin_id=${pinId}`),
   initiateLogin: () => api.get<{ pin_id: number; pin_code: string; auth_url: string }>('/api/auth/plex/login'),
   completeLogin: (pinId: number) => api.post<{ access_token: string }>(`/api/auth/plex/callback?pin_id=${pinId}`),
   getCurrentUser: () => api.get('/api/auth/me'),

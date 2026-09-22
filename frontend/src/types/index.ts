@@ -1,5 +1,9 @@
 // User types
 export interface User {
+  username?: string | null
+  must_change_password?: boolean
+  has_local_password?: boolean
+  plex_connected?: boolean
   id: number
   plex_username: string
   plex_email: string | null

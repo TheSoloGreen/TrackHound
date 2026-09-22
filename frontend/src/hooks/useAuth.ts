@@ -20,7 +20,11 @@ export function useAuth() {
   const login = useCallback(async (accessToken: string) => {
     localStorage.setItem('token', accessToken)
     setToken(accessToken)
-    await queryClient.invalidateQueries({ queryKey: ['currentUser'] })
+    const response = await authApi.getCurrentUser()
+    const previous = queryClient.getQueryData<User>(['currentUser'])
+    if (previous && previous.id !== response.data.id) queryClient.clear()
+    queryClient.setQueryData(['currentUser'], response.data)
+    window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: accessToken }))
   }, [queryClient])
 
   const logout = useCallback(async () => {
@@ -32,6 +36,7 @@ export function useAuth() {
     localStorage.removeItem('token')
     setToken(null)
     queryClient.clear()
+    window.dispatchEvent(new StorageEvent('storage', { key: 'token', newValue: null }))
   }, [queryClient])
 
   // Check for token changes (from other tabs or 401 interceptor)

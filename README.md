@@ -6,7 +6,7 @@ Media audio track scanner with Plex integration. Scans your media library to ide
 
 - **Multi-Location Scanning**: Scan media files across multiple NAS drives/mount points
 - **Audio Track Analysis**: Extract detailed audio track information (language, codec, channels, bitrate)
-- **Plex Integration**: Sign in with Plex and sync metadata for shows
+- **Flexible Sign-in**: Use a local username/password or optional Plex sign-in; connect Plex for metadata
 - **Anime Detection**: Automatically identify anime from Plex genres, folder names, or manual tagging
 - **Preference Rules**:
   - Require English audio for non-anime content
@@ -51,8 +51,41 @@ docker compose up -d --build
 # Access at http://localhost:8383
 ```
 
+### Local login and optional Plex
+
+After the first startup of this version, sign in as **admin** using the generated
+password in `/app/data/initial-admin-password`. With the default SQLite container:
+
+```bash
+docker exec trackhound cat /app/data/initial-admin-password
+```
+
+For the PostgreSQL Compose example, use container `trackhound-pro`. The password
+is unique to your installation, stored with owner-only file permissions, and is
+never printed in application logs. Change it at first login on **Account**; you
+can rename `admin` there too. Later use **Settings → Manage username, password,
+and Plex connection**. Passwords require 12–128 characters and are stored as
+salted scrypt hashes. Changing credentials signs out other sessions.
+
+On an existing single-user installation, local credentials are added to the same
+Plex account, preserving its library and settings. With multiple existing Plex
+users, a separate local account is created; no user's catalog is reassigned.
+Plex-only users can add local credentials from Account after signing in with Plex.
+Restarts do not reset credentials. The initial password file becomes obsolete
+once you change the password; changing that file does not reset an existing account.
+
+Plex is optional for local scanning. To use both login methods with the same
+library on a fresh installation, sign in locally first, change the initial
+password, then choose **Connect Plex** on Account. Signing in with an unlinked
+Plex identity creates its own account subject to the Plex policy below; accounts
+are never automatically merged. For local development, the password file defaults
+to `./data/initial-admin-password`; `INITIAL_ADMIN_PASSWORD_FILE` can override it.
+Keep the data directory writable and private. Use HTTPS when accessing the
+instance beyond a trusted local network.
+
 Plex sign-in is restricted to the numeric account IDs in `ALLOWED_PLEX_USER_IDS`.
-A non-empty list controls both new logins and existing sessions. On a fresh database,
+A non-empty list controls both new Plex logins and existing Plex sessions.
+Local password authentication is independent of this list. On a fresh database,
 an empty list allows the first Plex-verified account to claim the instance; from then
 on, only that stored Plex account can sign in or use its existing sessions while the
 list remains empty. To add accounts, set the complete list in `.env` (for example,

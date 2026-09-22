@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     allowed_plex_user_ids: str = ""
     media_writes_enabled: bool = False
 
+    # Initial local account (only used when no local credentials exist).
+    initial_admin_password_file: str = "./data/initial-admin-password"
+
     # Plex OAuth
     plex_client_identifier: str = "trackhound"
     plex_product: str = "TrackHound"

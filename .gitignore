@@ -73,3 +73,6 @@ docker/data/
 
 # Alembic
 migrations/versions/__pycache__/
+
+# Generated initial local credential
+initial-admin-password

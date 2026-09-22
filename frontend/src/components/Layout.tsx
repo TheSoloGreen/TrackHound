@@ -84,7 +84,7 @@ export default function Layout({ children }: LayoutProps) {
                   />
                 )}
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                  {user?.plex_username}
+                  {user?.username || user?.plex_username}
                 </span>
               </div>
               <button

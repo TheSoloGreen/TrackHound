@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { apiError } from '../api/errors'
 import PreferencesForm from '../components/PreferencesForm'
@@ -213,6 +214,7 @@ export default function SettingsPage() {
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+        <Link to="/account" className="text-orange-600 underline">Manage username, password, and Plex connection</Link>
         <p className="text-gray-500 dark:text-gray-400 mt-1">
           Configure scan locations and audio preferences
         </p>

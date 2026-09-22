@@ -39,3 +39,5 @@ README.md
 docker-compose*.yml
 Dockerfile
 .dockerignore
+
+**/initial-admin-password

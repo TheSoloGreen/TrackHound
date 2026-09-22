@@ -45,6 +45,22 @@ def validate_media_root_path(path: str) -> str:
 # ============== Auth Schemas ==============
 
 
+class PasswordLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class AccountUpdate(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    current_password: str = Field(default="", max_length=128)
+    new_password: Optional[str] = Field(default=None, min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def normalize_username(cls, value):
+        return value.lower()
+
+
 class PlexPinResponse(BaseModel):
     """Response when initiating Plex OAuth."""
 
@@ -67,6 +83,10 @@ class UserResponse(BaseModel):
 
     id: int
     plex_username: str
+    username: Optional[str] = None
+    must_change_password: bool = False
+    has_local_password: bool = False
+    plex_connected: bool = False
     plex_email: Optional[str] = None
     plex_thumb_url: Optional[str] = None
     created_at: datetime
