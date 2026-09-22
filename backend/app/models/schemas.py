@@ -45,6 +45,12 @@ def validate_media_root_path(path: str) -> str:
 # ============== Auth Schemas ==============
 
 
+class AuthModeUpdate(BaseModel):
+    mode: Literal["none", "login"]
+    username: Optional[str] = Field(default=None, min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_.-]+$")
+    password: Optional[str] = Field(default=None, min_length=12, max_length=128)
+
+
 class PasswordLogin(BaseModel):
     username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1, max_length=128)

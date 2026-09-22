@@ -16,13 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.encryption import encrypt_value
 from app.models.database import get_db
-from app.models.entities import User
-from app.models.schemas import PlexPinResponse, TokenResponse, UserResponse, PasswordLogin, AccountUpdate
+from app.models.entities import User, InstanceSettings
+from app.models.schemas import PlexPinResponse, TokenResponse, UserResponse, PasswordLogin, AccountUpdate, AuthModeUpdate
+from app.core.instance import instance_settings
 from app.core.local_auth import hash_password, verify_password, DUMMY_HASH
 
 router = APIRouter()
 settings = get_settings()
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 _login_windows: dict[str, tuple[float, int]] = {}
 
 
@@ -118,7 +119,7 @@ async def require_login_plex_user(plex_user_id: str, db: AsyncSession) -> None:
 
 
 async def get_authenticated_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     """Dependency to get current authenticated user."""
@@ -127,6 +128,9 @@ async def get_authenticated_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+    if credentials is None:
+        raise credentials_exception
 
     try:
         payload = jwt.decode(
@@ -159,14 +163,73 @@ async def get_authenticated_user(
     return user
 
 
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(security)],
+async def get_session_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
-    user = await get_authenticated_user(credentials, db)
-    if user.must_change_password:
+    config = await instance_settings(db)
+    if config and not config.auth_required:
+        owner = await db.get(User, config.owner_user_id)
+        if owner:
+            return owner
+        raise HTTPException(status_code=503, detail="Shared library account is unavailable.")
+    # Missing configuration fails closed; startup creates the default once.
+    return await get_authenticated_user(credentials, db)
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> User:
+    user = await get_session_user(credentials, db)
+    config = await instance_settings(db)
+    if (config is None or config.auth_required) and user.must_change_password:
         raise HTTPException(status_code=403, detail="Change the initial password in Account before using TrackHound.")
     return user
+
+
+@router.get("/config")
+async def get_auth_config(db: Annotated[AsyncSession, Depends(get_db)]):
+    config = await instance_settings(db)
+    return {"mode": "none" if config and not config.auth_required else "login"}
+
+
+@router.put("/config", dependencies=[Depends(limit_password_attempts)])
+async def set_auth_config(request: AuthModeUpdate,
+                          current_user: Annotated[User, Depends(get_current_user)],
+                          db: Annotated[AsyncSession, Depends(get_db)]):
+    config = await instance_settings(db)
+    if not config or current_user.id != config.owner_user_id:
+        raise HTTPException(status_code=403, detail="Only the instance owner can change authentication.")
+    required = request.mode == "login"
+    if required == config.auth_required:
+        return {"mode": request.mode}
+    password_hash = None
+    if required:
+        if not request.username or not request.password:
+            raise HTTPException(status_code=400, detail="Set a username and password before requiring login.")
+        password_hash = await asyncio.to_thread(hash_password, request.password)
+    owner_id, previous, version = current_user.id, config.auth_required, current_user.auth_version
+    await db.rollback()
+    from sqlalchemy.exc import IntegrityError
+    try:
+        changed = await db.execute(update(InstanceSettings).where(
+            InstanceSettings.id == 1, InstanceSettings.auth_required == previous
+        ).values(auth_required=required))
+        if changed.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Authentication mode changed. Reload Settings and try again.")
+        values = {"auth_version": User.auth_version + 1}
+        if required:
+            values.update(username=request.username.lower(), password_hash=password_hash,
+                          must_change_password=False, failed_login_attempts=0, locked_until=None)
+        owner_change = await db.execute(update(User).where(User.id == owner_id, User.auth_version == version).values(**values))
+        if owner_change.rowcount != 1:
+            raise HTTPException(status_code=409, detail="Account changed. Reload Settings and try again.")
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="That username is already in use.")
+    return {"mode": request.mode}
 
 
 @router.get("/plex/login", response_model=PlexPinResponse)
@@ -324,7 +387,7 @@ async def link_plex(pin_id: int,
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_info(
-    current_user: Annotated[User, Depends(get_authenticated_user)],
+    current_user: Annotated[User, Depends(get_session_user)],
 ):
     """Get current authenticated user info."""
     return current_user
@@ -360,9 +423,11 @@ async def password_login(request: PasswordLogin, db: Annotated[AsyncSession, Dep
 
 @router.put("/account", response_model=TokenResponse, dependencies=[Depends(limit_password_attempts)])
 async def update_account(request: AccountUpdate,
-                         current_user: Annotated[User, Depends(get_authenticated_user)],
+                         current_user: Annotated[User, Depends(get_session_user)],
                          db: Annotated[AsyncSession, Depends(get_db)]):
-    if current_user.password_hash and not await asyncio.to_thread(
+    config = await instance_settings(db)
+    password_required = config is None or config.auth_required
+    if password_required and current_user.password_hash and not await asyncio.to_thread(
             verify_password, request.current_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Current password is incorrect.")
     if (current_user.must_change_password or not current_user.password_hash) and not request.new_password:

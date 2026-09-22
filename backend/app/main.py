@@ -3,12 +3,13 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.static import SPAStaticFiles
 
+from app.version import VERSION, BUILD_REVISION
 from app.config import get_settings
 from app.models.database import init_db
 from app.api import auth, scan, media, settings as settings_router
@@ -21,8 +22,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown events."""
     # Startup
     await init_db()
-    from app.core.local_auth import bootstrap_local_account
-    await bootstrap_local_account()
+    from app.core.instance import bootstrap_instance
+    await bootstrap_instance()
     yield
     # Shutdown (cleanup if needed)
 
@@ -30,7 +31,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description="Media audio track scanner with Plex integration",
-    version="0.1.0",
+    version=VERSION,
     lifespan=lifespan,
 )
 
@@ -42,6 +43,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def reject_cross_origin_writes(request: Request, call_next):
+    # None mode has no bearer secret. Block cross-origin browser form writes,
+    # including POST endpoints that do not require a JSON body.
+    origin = request.headers.get("origin")
+    if origin and request.method not in {"GET", "HEAD", "OPTIONS"}:
+        allowed = {str(request.base_url).rstrip("/"), *settings.cors_origins_list}
+        if origin not in allowed:
+            return JSONResponse(status_code=403, content={"detail": "Cross-origin writes are not allowed."})
+    response = await call_next(request)
+    if request.url.path in {"/api/auth/config", "/api/auth/me"}:
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 # API routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
@@ -70,7 +86,13 @@ async def request_validation_exception_handler(request: Request, exc: RequestVal
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "version": "0.1.0"}
+    return {"status": "healthy", "version": VERSION, "revision": BUILD_REVISION}
+
+
+@app.get("/api/info")
+async def build_info(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return {"version": VERSION, "revision": BUILD_REVISION}
 
 
 # Serve static frontend files in production

@@ -38,6 +38,9 @@ api.interceptors.response.use(
 
 // Auth API
 export const authApi = {
+  getConfig: () => api.get<{ mode: 'none' | 'login' }>('/api/auth/config'),
+  setConfig: (data: { mode: 'none' | 'login'; username?: string; password?: string }) => api.put('/api/auth/config', data),
+  getBuildInfo: () => api.get<{ version: string; revision: string }>('/api/info', { headers: { 'Cache-Control': 'no-cache' } }),
   passwordLogin: (username: string, password: string) => api.post<{ access_token: string }>('/api/auth/login', { username, password }),
   updateAccount: (data: { username: string; current_password: string; new_password?: string }) => api.put<{ access_token: string }>('/api/auth/account', data),
   linkPlex: (pinId: number) => api.post<{ access_token: string }>(`/api/auth/plex/link?pin_id=${pinId}`),

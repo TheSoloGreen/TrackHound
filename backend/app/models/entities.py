@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text, Index, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text, Index, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -64,6 +64,15 @@ class User(Base):
     scan_locations: Mapped[list["ScanLocation"]] = relationship(
         "ScanLocation", back_populates="user", cascade="all, delete-orphan"
     )
+
+
+class InstanceSettings(Base):
+    """One authentication policy and public-mode owner per installation."""
+    __tablename__ = "instance_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_instance_singleton"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    auth_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
 
 
 class UserPreference(Base):
