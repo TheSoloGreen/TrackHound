@@ -1,6 +1,7 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from './hooks/useAuth'
 import Layout from './components/Layout'
+import AccountPage from './pages/AccountPage'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import ShowsPage from './pages/ShowsPage'
@@ -9,7 +10,8 @@ import FilesPage from './pages/FilesPage'
 import SettingsPage from './pages/SettingsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth()
+  const { isAuthenticated, isLoading, user } = useAuth()
+  const location = useLocation()
 
   if (isLoading) {
     return (
@@ -22,6 +24,8 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
   }
+
+  if (user?.must_change_password && location.pathname !== "/account") return <Navigate to="/account" replace />
 
   return <>{children}</>
 }
@@ -43,6 +47,7 @@ function App() {
                 <Route path="/shows" element={<Navigate to="/library" replace />} />
                 <Route path="/shows/:id" element={<Navigate to="/library" replace />} />
                 <Route path="/files" element={<FilesPage />} />
+                <Route path="/account" element={<AccountPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </Layout>

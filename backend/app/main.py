@@ -21,6 +21,8 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler for startup/shutdown events."""
     # Startup
     await init_db()
+    from app.core.local_auth import bootstrap_local_account
+    await bootstrap_local_account()
     yield
     # Shutdown (cleanup if needed)
 

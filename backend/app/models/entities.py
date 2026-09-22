@@ -19,15 +19,15 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """User model for Plex-authenticated users."""
+    """User account with optional local and Plex credentials."""
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    plex_user_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    plex_user_id: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
     plex_username: Mapped[str] = mapped_column(String(255), nullable=False)
     plex_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    plex_token: Mapped[str] = mapped_column(Text, nullable=False)
+    plex_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     plex_thumb_url: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, nullable=False
@@ -35,6 +35,21 @@ class User(Base):
     last_login: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow, nullable=False
     )
+
+    username: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    @property
+    def has_local_password(self) -> bool:
+        return bool(self.password_hash)
+
+    @property
+    def plex_connected(self) -> bool:
+        return bool(self.plex_user_id and self.plex_token)
 
     # Relationships
     preferences: Mapped[list["UserPreference"]] = relationship(

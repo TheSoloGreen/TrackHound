@@ -87,7 +87,7 @@ async def seed_legacy(engine, version):
 
 async def assert_upgraded(engine):
     async with engine.connect() as connection:
-        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004_language_review"
+        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0005_local_auth"
         diffs = await connection.run_sync(lambda sync: compare_metadata(MigrationContext.configure(sync), Base.metadata))
         assert diffs == []
         if connection.dialect.name == "sqlite":

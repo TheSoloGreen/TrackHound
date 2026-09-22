@@ -5,6 +5,7 @@ services:
     ports:
       - "8080:8000"
     volumes:
+      - app_data:/app/data
       # Media volumes - adjust these to your setup
       - /mnt/user/Media/TV:/media/tv:ro
       - /mnt/user/Media/Anime:/media/anime:ro
@@ -38,4 +39,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  app_data:
   postgres_data:

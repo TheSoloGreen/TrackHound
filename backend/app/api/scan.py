@@ -346,7 +346,7 @@ async def start_scan(
     # An unreadable saved Plex token must not prevent local filesystem scanning.
     plex_warning = None
     try:
-        plex_token = decrypt_value(current_user.plex_token)
+        plex_token = decrypt_value(current_user.plex_token) if current_user.plex_token else None
     except ValueError:
         plex_token = None
         plex_warning = "Stored Plex credentials are unavailable. Local scanning continues; sign in again to reconnect Plex."

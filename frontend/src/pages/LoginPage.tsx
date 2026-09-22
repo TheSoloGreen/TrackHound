@@ -4,10 +4,14 @@ import { Tv, Loader2 } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { authApi } from '../api/client'
 import { isAxiosError } from 'axios'
+import { apiError } from '../api/errors'
 
 export default function LoginPage() {
   const { isAuthenticated, login } = useAuth()
   const navigate = useNavigate()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [passwordLoading, setPasswordLoading] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -107,6 +111,18 @@ export default function LoginPage() {
     }
   }
 
+  async function handlePasswordLogin(event: React.FormEvent) {
+    event.preventDefault()
+    setPasswordLoading(true); setError(null)
+    try {
+      const response = await authApi.passwordLogin(username, password)
+      await login(response.data.access_token)
+      setPassword('')
+      navigate('/', { replace: true })
+    } catch (err) { setError(apiError(err, 'Could not sign in. Please try again.')) }
+    finally { setPasswordLoading(false) }
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
       <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl p-8 w-full max-w-md">
@@ -126,14 +142,24 @@ export default function LoginPage() {
         {/* Error message */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
-            <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+            <p role="alert" className="text-sm text-red-700 dark:text-red-400">{error}</p>
           </div>
         )}
 
+        <form onSubmit={handlePasswordLogin} className="space-y-4 mb-6">
+          <label className="block text-gray-900 dark:text-white">Username
+            <input autoComplete="username" required maxLength={64} value={username} onChange={e => setUsername(e.target.value)} disabled={isLoading || passwordLoading} className="block w-full mt-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 p-3" />
+          </label>
+          <label className="block text-gray-900 dark:text-white">Password
+            <input type="password" autoComplete="current-password" required maxLength={128} value={password} onChange={e => setPassword(e.target.value)} disabled={isLoading || passwordLoading} className="block w-full mt-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 p-3" />
+          </label>
+          <button disabled={isLoading || passwordLoading} className="w-full rounded-xl bg-orange-600 p-3 font-semibold text-white disabled:opacity-50">{passwordLoading ? 'Signing in…' : 'Sign in'}</button>
+        </form>
+        <p className="mb-4 text-sm text-gray-500 text-center">Or use your Plex account</p>
         {/* Login button */}
         <button
           onClick={handlePlexLogin}
-          disabled={isLoading}
+          disabled={isLoading || passwordLoading}
           className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-[#e5a00d] hover:bg-[#f5b82e] disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-colors"
         >
           {isLoading ? (
@@ -156,6 +182,8 @@ export default function LoginPage() {
             Complete authorization in the popup window
           </p>
         )}
+
+        <p className="mt-5 text-xs text-gray-500">First login: use admin and the password in your server's data/initial-admin-password file. You will be asked to change it.</p>
 
         {/* Features */}
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
