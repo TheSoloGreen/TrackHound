@@ -205,6 +205,7 @@ class MediaFileResponse(BaseModel):
     last_scanned: datetime
     has_issues: bool
     issue_details: Optional[str] = None
+    language_review_note: Optional[str] = None
     audio_tracks: list[AudioTrackResponse] = []
     edit_capabilities: Optional[MediaEditCapabilities] = None
 
@@ -359,6 +360,13 @@ class UserSettingsUpdate(BaseModel):
         return normalize_file_extensions(extensions) if extensions is not None else None
 
 
+IssueCategory = Literal["missing_required_audio", "preferred_not_default", "missing_english", "missing_japanese", "missing_dual_audio", "unknown_language"]
+
+
+class LanguageReviewRequest(BaseModel):
+    note: str = Field(max_length=2000)
+
+
 class UpdateDefaultAudioRequest(BaseModel):
     """Request to set a media file default audio track by language."""
 
@@ -430,4 +438,8 @@ class DashboardStats(BaseModel):
     missing_dual_audio_movies_count: int
     missing_dual_audio_tv_count: int
     missing_dual_audio_anime_count: int
+    preferred_not_default_count: int = 0
+    preferred_not_default_movies_count: int = 0
+    preferred_not_default_tv_count: int = 0
+    preferred_not_default_anime_count: int = 0
     last_scan: Optional[datetime] = None

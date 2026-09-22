@@ -53,6 +53,43 @@ class PlexConnector:
         self._shows_cache: dict[str, PlexShow] = {}  # title variant -> show
         self._file_path_cache: dict[str, PlexShow] = {}  # normalized path -> show
         self._shows_by_key: dict[str, PlexShow] = {}  # rating_key -> show
+        self._movies: Optional[list[PlexShow]] = None
+
+    def sync_movie_metadata(self, file_path: str, title_from_path: Optional[str] = None) -> Optional[dict]:
+        """Match only movies, preferring exact paths and unambiguous title/year pairs."""
+        if self._movies is None:
+            movies = []
+            for section in self._get_server().library.sections():
+                if section.type != "movie":
+                    continue
+                for movie in section.all():
+                    genres = [genre.tag for genre in (getattr(movie, "genres", None) or [])]
+                    movies.append(PlexShow(
+                        rating_key=str(movie.ratingKey), title=movie.title,
+                        original_title=getattr(movie, "originalTitle", None),
+                        year=getattr(movie, "year", None), genres=genres,
+                        thumb_url=getattr(movie, "thumbUrl", None), is_anime=self._is_anime(genres),
+                        file_paths=[part.file for media in (getattr(movie, "media", None) or [])
+                                    for part in media.parts if part.file],
+                    ))
+            self._movies = movies
+        path = self._normalize_path(file_path)
+        matches = [movie for movie in self._movies
+                   if any(self._normalize_path(candidate) == path for candidate in movie.file_paths)]
+        if not matches and title_from_path:
+            match = re.fullmatch(r"(.*?)\s*\((\d{4})\)", title_from_path.strip())
+            title, year = (match[1].strip(), int(match[2])) if match else (title_from_path.strip(), None)
+            def normalize(value):
+                return re.sub(r"[^\w]+", " ", value or "").strip().casefold()
+            matches = [movie for movie in self._movies
+                       if normalize(title) in {normalize(movie.title), normalize(movie.original_title)}
+                       and (year is None or movie.year == year)]
+        if len(matches) != 1:
+            return None
+        movie = matches[0]
+        return {"plex_rating_key": movie.rating_key, "title": movie.title, "year": movie.year,
+                "original_title": movie.original_title, "genres": movie.genres,
+                "thumb_url": movie.thumb_url, "is_anime": movie.is_anime}
 
     def _get_server(self):
         """Get or create Plex server connection."""

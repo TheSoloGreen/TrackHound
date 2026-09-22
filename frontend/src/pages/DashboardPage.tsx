@@ -14,17 +14,21 @@ import type { DashboardStats, ScanStatus } from '../types'
 import { useScanStatus } from '../hooks/useScanStatus'
 import ScanSummary from '../components/ScanSummary'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { apiError } from '../api/errors'
 
 function StatCard({
   icon: Icon,
   label,
   value,
   color = 'blue',
+  to,
 }: {
   icon: React.ElementType
   label: string
   value: number | string
   color?: 'blue' | 'green' | 'orange' | 'red' | 'purple'
+  to?: string
 }) {
   const colors = {
     blue: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -42,7 +46,7 @@ function StatCard({
         </div>
         <div>
           <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
-          <p className="text-2xl font-bold text-gray-900 dark:text-white">{value}</p>
+          <p className="text-2xl font-bold text-gray-900 dark:text-white">{to ? <Link to={to} aria-label={`View ${label.toLowerCase()}`} className="underline decoration-dotted">{value}</Link> : value}</p>
         </div>
       </div>
     </div>
@@ -100,6 +104,17 @@ export default function DashboardPage() {
   })
 
   const isScanning = scanStatus?.is_running
+  const issueRows = [
+    ['No English tag', 'missing_english'], ['No Japanese tag', 'missing_japanese'],
+    ['Missing dual audio', 'missing_dual_audio'], ['Preferred audio not default', 'preferred_not_default'],
+  ] as const
+  const issueCount = (category: string, type?: string) => {
+    const key = `${category}_${type ? type + '_' : ''}count` as keyof DashboardStats
+    const value = Number(stats?.[key] ?? 0)
+    const query = new URLSearchParams({ issue_category: category })
+    if (type) query.set('media_type', type === 'movies' ? 'movie' : type)
+    return value > 0 ? <Link className="underline text-orange-700 dark:text-orange-400" to={`/files?${query}`} aria-label={`View ${category.replaceAll('_', ' ')} ${type || 'all media'} files`}>{value}</Link> : value
+  }
 
   return (
     <div className="space-y-8">
@@ -151,7 +166,7 @@ export default function DashboardPage() {
       {(startScan.isError || cancelScan.isError) && (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
           <p className="text-sm text-red-700 dark:text-red-400">
-            {startScan.isError ? 'Failed to start scan.' : 'Failed to cancel scan.'} Please try again.
+            {apiError(startScan.isError ? startScan.error : cancelScan.error, startScan.isError ? 'Failed to start scan. Please try again.' : 'Failed to cancel scan. Please try again.')} <Link className="underline" to="/settings">Check scan locations</Link>
           </p>
         </div>
       )}
@@ -159,24 +174,28 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={Layers}
+          to="/library"
           label="Total Titles"
           value={statsLoading ? '...' : stats?.total_titles || 0}
           color="blue"
         />
         <StatCard
           icon={FileVideo}
+          to="/files"
           label="Total Files"
           value={statsLoading ? '...' : stats?.total_files || 0}
           color="green"
         />
         <StatCard
           icon={AlertTriangle}
+          to="/files?has_issues=true"
           label="Files with Issues"
           value={statsLoading ? '...' : stats?.total_files_with_issues || 0}
           color="red"
         />
         <StatCard
           icon={Sparkles}
+          to="/library?media_type=anime"
           label="Anime Titles"
           value={statsLoading ? '...' : stats?.anime_count || 0}
           color="purple"
@@ -250,6 +269,7 @@ export default function DashboardPage() {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Audio Issues Summary by Media Type
           </h2>
+          <p className="text-xs text-gray-500 mb-3">Categories overlap: one file can appear in multiple rows. Unknown language tags need review and do not prove the spoken language is missing.</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -262,27 +282,13 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody className="text-gray-700 dark:text-gray-300">
-                <tr className="border-b border-gray-100 dark:border-gray-700/60">
-                  <td className="py-2 pr-2">Missing English Audio</td>
-                  <td className="py-2 px-2">{stats?.missing_english_movies_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_english_tv_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_english_anime_count || 0}</td>
-                  <td className="py-2 pl-2 text-right font-semibold text-red-600 dark:text-red-400">{stats?.missing_english_count || 0}</td>
-                </tr>
-                <tr className="border-b border-gray-100 dark:border-gray-700/60">
-                  <td className="py-2 pr-2">Missing Japanese Audio</td>
-                  <td className="py-2 px-2">{stats?.missing_japanese_movies_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_japanese_tv_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_japanese_anime_count || 0}</td>
-                  <td className="py-2 pl-2 text-right font-semibold text-red-600 dark:text-red-400">{stats?.missing_japanese_count || 0}</td>
-                </tr>
-                <tr>
-                  <td className="py-2 pr-2">Missing Dual Audio</td>
-                  <td className="py-2 px-2">{stats?.missing_dual_audio_movies_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_dual_audio_tv_count || 0}</td>
-                  <td className="py-2 px-2">{stats?.missing_dual_audio_anime_count || 0}</td>
-                  <td className="py-2 pl-2 text-right font-semibold text-orange-600 dark:text-orange-400">{stats?.missing_dual_audio_count || 0}</td>
-                </tr>
+                {issueRows.map(([label, category]) => <tr key={category} className="border-b border-gray-100 dark:border-gray-700/60">
+                  <th scope="row" className="py-2 pr-2 text-left font-normal">{label}</th>
+                  <td className="py-2 px-2">{issueCount(category, 'movies')}</td>
+                  <td className="py-2 px-2">{issueCount(category, 'tv')}</td>
+                  <td className="py-2 px-2">{issueCount(category, 'anime')}</td>
+                  <td className="py-2 pl-2 text-right font-semibold">{issueCount(category)}</td>
+                </tr>)}
               </tbody>
             </table>
           </div>

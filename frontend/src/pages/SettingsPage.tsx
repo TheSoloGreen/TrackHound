@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { apiError } from '../api/errors'
 import PreferencesForm from '../components/PreferencesForm'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, FolderOpen, ChevronRight, Folder } from 'lucide-react'
@@ -35,7 +36,7 @@ function DirectoryPicker({
 }) {
   const [currentPath, setCurrentPath] = useState('/media')
 
-  const { data, isLoading, error } = useQuery<DirectoryBrowseResponse>({
+  const { data, isLoading, error, refetch } = useQuery<DirectoryBrowseResponse>({
     queryKey: ['browse', currentPath],
     queryFn: async () => {
       const response = await scanApi.browse(currentPath)
@@ -75,7 +76,8 @@ function DirectoryPicker({
           </div>
         ) : error ? (
           <div className="p-4 text-sm text-red-600 dark:text-red-400">
-            Could not browse this directory.
+            <p role="alert">{apiError(error, 'Could not browse this directory.')}</p>
+            <button onClick={() => void refetch()} className="underline mt-2">Retry directory</button>
           </div>
         ) : data && data.directories.length > 0 ? (
           <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -111,6 +113,7 @@ function DirectoryPicker({
             Cancel
           </button>
           <button
+            disabled={isLoading || !!error}
             onClick={() => {
               const name = currentPath.split('/').filter(Boolean).pop() || 'media'
               onSelect(currentPath, name)
@@ -148,7 +151,7 @@ export default function SettingsPage() {
   })
 
   // Fetch scan locations
-  const { data: locations, isLoading: locationsLoading } = useQuery<ScanLocation[]>({
+  const { data: locations, isLoading: locationsLoading, error: locationsError, refetch: retryLocations } = useQuery<ScanLocation[]>({
     queryKey: ['scanLocations'],
     queryFn: async () => {
       const response = await scanApi.getLocations()
@@ -197,7 +200,7 @@ export default function SettingsPage() {
     }))
   }
 
-  if (settingsLoading || locationsLoading) {
+  if (settingsLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
@@ -222,6 +225,14 @@ export default function SettingsPage() {
           Scan Locations
         </h2>
 
+        {locationsLoading && <p role="status">Loading scan locations…</p>}
+        {locationsError && <div role="alert" className="text-red-600 mb-3">
+          <p>{apiError(locationsError, 'Could not load scan locations.')}</p>
+          <button onClick={() => void retryLocations()} className="underline">Retry scan locations</button>
+        </div>}
+        {deleteLocation.isError && <p role="alert" className="text-red-600">{apiError(deleteLocation.error, 'Could not delete location. Please try again.')}</p>}
+        {toggleLocation.isError && <p role="alert" className="text-red-600">{apiError(toggleLocation.error, 'Could not change location. Please try again.')}</p>}
+        {(deleteLocation.isPending || toggleLocation.isPending) && <p role="status">{deleteLocation.isPending ? 'Deleting location…' : 'Updating location…'}</p>}
         {/* Existing locations */}
         <div className="space-y-3 mb-6">
           {locations?.map((loc) => {
@@ -265,6 +276,7 @@ export default function SettingsPage() {
           )}
         </div>
 
+        {addLocation.isError && <p role="alert" className="text-red-600 mb-3">{apiError(addLocation.error, 'Could not add location. Please try again.')}</p>}
         {/* Add new location */}
         {showPicker ? (
           <div className="space-y-4">
@@ -279,12 +291,14 @@ export default function SettingsPage() {
                 </div>
                 <input
                   type="text"
+                  aria-label="Location label"
                   placeholder="Label"
                   value={newLocation.label}
                   onChange={(e) => setNewLocation({ ...newLocation, label: e.target.value })}
                   className="sm:w-40 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
                 <select
+                  aria-label="Location media type"
                   value={newLocation.media_type}
                   onChange={(e) => setNewLocation({ ...newLocation, media_type: e.target.value as MediaType })}
                   className="sm:w-36 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -301,7 +315,7 @@ export default function SettingsPage() {
                   className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-lg"
                 >
                   <Plus className="w-4 h-4" />
-                  Add
+                  {addLocation.isPending ? 'Adding…' : 'Add'}
                 </button>
               </form>
             )}
