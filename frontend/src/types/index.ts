@@ -8,6 +8,9 @@ export interface User {
   last_login: string
 }
 
+export type IssueCategory = 'missing_required_audio' | 'preferred_not_default' | 'missing_english' | 'missing_japanese' | 'missing_dual_audio' | 'unknown_language'
+export interface FileFilters { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string; issue_category?: IssueCategory; media_type?: MediaType; file_id?: number }
+
 // Media type union
 export type MediaType = 'tv' | 'movie' | 'anime'
 
@@ -90,6 +93,7 @@ export interface MediaFile {
   last_scanned: string
   has_issues: boolean
   issue_details: string | null
+  language_review_note?: string | null
   audio_tracks: AudioTrack[]
   edit_capabilities?: MediaEditCapabilities
 }
@@ -168,6 +172,10 @@ export interface DashboardStats {
   missing_dual_audio_movies_count: number
   missing_dual_audio_tv_count: number
   missing_dual_audio_anime_count: number
+  preferred_not_default_count?: number
+  preferred_not_default_movies_count?: number
+  preferred_not_default_tv_count?: number
+  preferred_not_default_anime_count?: number
   last_scan: string | null
 }
 

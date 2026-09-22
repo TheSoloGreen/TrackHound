@@ -5,12 +5,14 @@ import logging
 import stat as stat_module
 import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from sqlalchemy import select, func, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import OperationalError
 
 from app.models.database import async_session_maker
 from app.models.entities import MediaFile, Show, Season, ScanLocation, AudioTrack
@@ -180,46 +182,78 @@ class MediaScanner:
                     files.append(str(path))
         return sorted(files)
 
-    async def process_file(self, file_path, base_path, media_type, user_id, db, *, incremental=True):
-        """Roll back only the current file when a probe or database write fails."""
-        try:
-            async with db.begin_nested():
-                return await self._process_file(file_path, base_path, media_type, user_id, db, incremental)
-        except Exception as error:
-            logger.error("Error processing file %s: %s", file_path, error)
-            await scan_state_manager.append_error(user_id, f"{file_path}: {error}")
-            return None
+    async def process_file(self, file_path, base_path, media_type, user_id, db, *, incremental=True, managed=False):
+        """Managed scans own the transaction; other callers retain their savepoint."""
+        prepared = {}
+        for attempt in range(4):
+            if managed and await scan_state_manager.is_cancel_requested(user_id):
+                return None
+            try:
+                existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
+                before = await asyncio.to_thread(os.stat, file_path)
+                if incremental and existing and existing.last_modified == datetime.fromtimestamp(before.st_mtime) and existing.file_size == before.st_size:
+                    if managed:
+                        await db.commit()
+                    return existing
+                if managed:
+                    # Release the read snapshot before slow probes/network calls.
+                    await db.rollback()
+                if not prepared:
+                    prepared.update(await self._prepare_file(file_path, base_path, media_type, user_id))
+                async with db.begin_nested():
+                    result = await self._process_file(file_path, base_path, media_type, user_id, db, prepared)
+                if managed:
+                    await db.commit()
+                return result
+            except Exception as error:
+                if managed:
+                    # A savepoint rollback alone cannot refresh a WAL read snapshot.
+                    await db.rollback()
+                code = getattr(getattr(error, "orig", None), "sqlite_errorcode", 0) or 0
+                transient = isinstance(error, OperationalError) and (code & 0xff) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+                if managed and transient and attempt < 3:
+                    await asyncio.sleep(0.1 * 2 ** attempt)
+                    continue
+                logger.error("Error processing file %s: %s", file_path, error)
+                message = "Database remained busy after retries; retry this file when other writes finish." if transient else str(error)
+                await scan_state_manager.append_error(user_id, f"{file_path}: {message}")
+                return None
 
-    async def _process_file(self, file_path, base_path, media_type, user_id, db, incremental):
-        existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
+    async def _prepare_file(self, file_path, base_path, media_type, user_id):
         before = await asyncio.to_thread(os.stat, file_path)
-        modified = datetime.fromtimestamp(before.st_mtime)
-        if incremental and existing and existing.last_modified == modified and existing.file_size == before.st_size:
-            return existing
-
         audio = require_successful_analysis(await asyncio.to_thread(self.analyzer.analyze, file_path))
         after = await asyncio.to_thread(os.stat, file_path)
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
             raise ValueError("File changed during analysis; retry the scan when external writes finish.")
-
         base_type = "movie" if media_type == "movie" else "tv"
         info = ({"show": parse_movie_title(file_path, base_path), "season": None, "episode": None}
                 if base_type == "movie" else parse_show_info(file_path, base_path))
         metadata = None
         if self.plex_connector:
             try:
-                metadata = await asyncio.to_thread(self.plex_connector.sync_show_metadata, file_path=file_path, title_from_path=info["show"])
+                lookup = self.plex_connector.sync_movie_metadata if base_type == "movie" else self.plex_connector.sync_show_metadata
+                metadata = await asyncio.to_thread(lookup, file_path=file_path, title_from_path=info["show"])
             except Exception as error:
                 logger.warning("Plex enrichment disabled for this scan (%s)", type(error).__name__)
                 self.plex_connector = None
                 self.plex_failed = True
                 await scan_state_manager.append_warning(user_id, "Plex metadata is unavailable. Local scanning continues; check Plex server access or sign in again before the next scan.")
 
+        return {"audio": audio, "info": info, "metadata": metadata, "stat": after, "fixed": False}
+
+    async def _process_file(self, file_path, base_path, media_type, user_id, db, prepared):
+        existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
+        audio, info, metadata = prepared["audio"], prepared["info"], prepared["metadata"]
+        base_type = "movie" if media_type == "movie" else "tv"
+        current = await asyncio.to_thread(os.stat, file_path)
+        previous = prepared["stat"]
+        if (current.st_ino, current.st_size, current.st_mtime_ns) != (previous.st_ino, previous.st_size, previous.st_mtime_ns):
+            raise ValueError("File changed before persistence; retry the scan.")
         title = metadata.get("title") if metadata else info["show"]
         rating_key = metadata.get("plex_rating_key") if metadata else None
         show = await db.scalar(select(Show).where(Show.id == existing.show_id, Show.user_id == user_id)) if existing and existing.show_id else None
         if not show and rating_key:
-            show = await db.scalar(select(Show).where(Show.plex_rating_key == rating_key, Show.user_id == user_id).order_by(Show.id).limit(1))
+            show = await db.scalar(select(Show).where(Show.plex_rating_key == rating_key, Show.user_id == user_id, Show.base_media_type == base_type).order_by(Show.id).limit(1))
         if not show and title:
             show = await db.scalar(select(Show).where(Show.user_id == user_id, Show.title.in_([title, info["show"]]),
                                                      Show.base_media_type == base_type).order_by(Show.id).limit(1))
@@ -246,8 +280,12 @@ class MediaScanner:
                 show.thumb_url = metadata.get("thumb_url")
             await db.flush()
 
-        audio = require_successful_analysis(await asyncio.to_thread(self._auto_fix_default_track, file_path, audio, is_anime))
-        after = await asyncio.to_thread(os.stat, file_path)
+        if not prepared["fixed"]:
+            # Cache the resulting probe before any retriable database persistence.
+            # Never repeat a physical edit when a later flush or commit is busy.
+            audio = require_successful_analysis(await asyncio.to_thread(self._auto_fix_default_track, file_path, audio, is_anime))
+            prepared.update(audio=audio, stat=await asyncio.to_thread(os.stat, file_path), fixed=True)
+        after = prepared["stat"]
         season = None
         if show and base_type != "movie" and info.get("season") is not None:
             season = await db.scalar(select(Season).where(Season.show_id == show.id, Season.season_number == info["season"]).order_by(Season.id).limit(1))
@@ -309,7 +347,7 @@ def _missing_paths(rows, roots):
 async def _reconcile_missing_files(db, user_id, discovered, roots):
     if not roots:
         return 0
-    scope = or_(*(MediaFile.file_path.startswith(root.rstrip("/") + "/", autoescape=True) for root in roots))
+    scope = or_(*(MediaFile.file_path.startswith(root.rstrip("/\\") + os.sep, autoescape=True) for root in roots))
     rows = (await db.execute(select(MediaFile.id, MediaFile.file_path).where(MediaFile.user_id == user_id, scope))).all()
     missing = await asyncio.to_thread(_missing_paths, [row for row in rows if row.file_path not in discovered], roots)
     for start in range(0, len(missing), 500):
@@ -339,6 +377,7 @@ async def run_scan(locations, location_media_types, user_id, incremental=True, u
             configured = (await db.scalars(select(ScanLocation).where(ScanLocation.user_id == user_id, ScanLocation.enabled == True))).all()
             types = {location.path: location.media_type for location in configured}
             types.update(location_media_types)
+            await db.rollback()  # No database snapshot during filesystem discovery.
             all_files, roots, complete = set(), {}, True
             for location in locations:
                 if await scan_state_manager.is_cancel_requested(user_id):
@@ -363,9 +402,8 @@ async def run_scan(locations, location_media_types, user_id, incremental=True, u
                 candidates = [root for root in types if Path(file_path).is_relative_to(root)]
                 base_path = max(candidates, key=lambda root: len(Path(root).parts))
                 await scan_state_manager.update_status(user_id, current_location=base_path, current_file=Path(file_path).name)
-                result = await scanner.process_file(file_path, base_path, types[base_path], user_id, db, incremental=incremental)
+                result = await scanner.process_file(file_path, base_path, types[base_path], user_id, db, incremental=incremental, managed=True)
                 complete = complete and result is not None
-                await db.commit()
                 await scan_state_manager.update_status(user_id, files_scanned=index + 1)
             reconciled = complete and len(roots) == len(locations) and not await scan_state_manager.is_cancel_requested(user_id)
             removed = await _reconcile_missing_files(db, user_id, all_files, roots) if reconciled else 0
@@ -373,7 +411,7 @@ async def run_scan(locations, location_media_types, user_id, incremental=True, u
             current_locations = (await db.scalars(select(ScanLocation).where(ScanLocation.user_id == user_id))).all()
             for location in current_locations:
                 location.file_count = await db.scalar(select(func.count(MediaFile.id)).where(MediaFile.user_id == user_id,
-                    MediaFile.file_path.startswith(location.path.rstrip("/") + "/", autoescape=True))) or 0
+                    MediaFile.file_path.startswith(location.path.rstrip("/\\") + os.sep, autoescape=True))) or 0
                 if reconciled and location.path in roots:
                     location.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
             if reconciled and await scan_state_manager.is_cancel_requested(user_id):

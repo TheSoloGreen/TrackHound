@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 import { scanApi } from '../api/client'
 import { useScanStatus } from '../hooks/useScanStatus'
 import ScanSummary from '../components/ScanSummary'
@@ -48,7 +49,7 @@ it('lets the user request a full scan of unchanged files', async () => {
   vi.spyOn(mediaApi, 'getStats').mockResolvedValue({ data: {} } as Awaited<ReturnType<typeof mediaApi.getStats>>)
   vi.spyOn(scanApi, 'getStatus').mockResolvedValue({ data: { ...runningScan, is_running: false, outcome: 'idle' } } as Awaited<ReturnType<typeof scanApi.getStatus>>)
   const start = vi.spyOn(scanApi, 'start').mockResolvedValue({ data: runningScan } as Awaited<ReturnType<typeof scanApi.start>>)
-  renderWithClient(<DashboardPage />)
+  renderWithClient(<MemoryRouter><DashboardPage /></MemoryRouter>)
   await userEvent.click(await screen.findByRole('checkbox', { name: 'Full scan' }))
   await userEvent.click(screen.getByRole('button', { name: 'Start Scan' }))
   await waitFor(() => expect(start).toHaveBeenCalledWith({ incremental: false }))

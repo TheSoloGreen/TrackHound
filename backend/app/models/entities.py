@@ -157,6 +157,7 @@ class MediaFile(Base):
     last_modified: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     has_issues: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    language_review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="media_files")

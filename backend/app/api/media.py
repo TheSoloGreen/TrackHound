@@ -34,6 +34,8 @@ from app.models.schemas import (
     MediaEditCapabilities,
 )
 from app.services.exporter import Exporter
+from app.core.issue_filters import issue_predicate
+from app.models.schemas import IssueCategory, LanguageReviewRequest
 
 router = APIRouter()
 
@@ -60,7 +62,9 @@ def _build_media_file_filters(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
-    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = None,
+    issue_category: Optional[IssueCategory] = None,
+    media_type: Optional[Literal["tv", "movie", "anime"]] = None,
+    file_id: Optional[int] = None,
 ) -> list:
     """Build shared media-file filters for list/export endpoints."""
     filters = [MediaFile.user_id == current_user.id]
@@ -81,19 +85,12 @@ def _build_media_file_filters(
         )
     if search:
         filters.append(MediaFile.filename.ilike(f"%{search}%"))
-    if issue_category == "missing_required_audio":
-        filters.append(
-            _build_issue_predicate(
-                "%No audio tracks found%",
-                "%Missing English audio track%",
-                "%Missing Japanese audio track (anime)%",
-                "%Missing English audio for dual audio (anime)%",
-                "%Missing Japanese audio for dual audio (anime)%",
-                "%Missing dual audio (English + Japanese) for anime%",
-            )
-        )
-    elif issue_category == "preferred_not_default":
-        filters.append(_build_issue_predicate("%Default audio track is '%"))
+    if issue_category:
+        filters.append(issue_predicate(issue_category))
+    if media_type:
+        filters.append(MediaFile.show.has(and_(Show.user_id == current_user.id, Show.media_type == media_type)))
+    if file_id is not None:
+        filters.append(MediaFile.id == file_id)
 
     return filters
 
@@ -156,6 +153,7 @@ def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
         last_scanned=mf.last_scanned,
         has_issues=mf.has_issues,
         issue_details=mf.issue_details,
+        language_review_note=mf.language_review_note,
         audio_tracks=_build_audio_track_responses(mf.audio_tracks),
         edit_capabilities=get_media_edit_capabilities(mf.file_path),
     )
@@ -329,22 +327,10 @@ async def get_dashboard_stats(
         select(func.count(MediaFile.id)).where(*media_scope_filters, MediaFile.has_issues == True)
     ) or 0
 
-    missing_english_predicate = _build_issue_predicate(
-        "%Missing English audio track%",
-        "%Missing English audio for dual audio (anime)%",
-        "%missing_english%",
-    )
-    missing_japanese_predicate = _build_issue_predicate(
-        "%Missing Japanese audio track (anime)%",
-        "%Missing Japanese audio for dual audio (anime)%",
-        "%missing_japanese%",
-    )
-    missing_dual_audio_predicate = _build_issue_predicate(
-        "%Missing dual audio (English + Japanese) for anime%",
-        "%Missing English audio for dual audio (anime)%",
-        "%Missing Japanese audio for dual audio (anime)%",
-        "%missing_dual_audio%",
-    )
+    missing_english_predicate = issue_predicate("missing_english")
+    missing_japanese_predicate = issue_predicate("missing_japanese")
+    missing_dual_audio_predicate = issue_predicate("missing_dual_audio")
+    preferred_predicate = issue_predicate("preferred_not_default")
 
     async def _count_by_issue_and_media_type(issue_predicate, media_type: str) -> int:
         return (
@@ -410,6 +396,10 @@ async def get_dashboard_stats(
         missing_dual_audio_movies_count=missing_dual_audio_movies_count,
         missing_dual_audio_tv_count=missing_dual_audio_tv_count,
         missing_dual_audio_anime_count=missing_dual_audio_anime_count,
+        preferred_not_default_count=await db.scalar(select(func.count(MediaFile.id)).where(*media_scope_filters, preferred_predicate)) or 0,
+        preferred_not_default_movies_count=await _count_by_issue_and_media_type(preferred_predicate, "movie"),
+        preferred_not_default_tv_count=await _count_by_issue_and_media_type(preferred_predicate, "tv"),
+        preferred_not_default_anime_count=await _count_by_issue_and_media_type(preferred_predicate, "anime"),
         last_scan=last_scan,
     )
 
@@ -780,7 +770,9 @@ async def list_media_files(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
-    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = Query(default=None),
+    issue_category: Optional[IssueCategory] = None,
+    media_type: Optional[Literal["tv", "movie", "anime"]] = None,
+    file_id: Optional[int] = None,
 ):
     """List media files with pagination and filters."""
     filters = _build_media_file_filters(
@@ -789,6 +781,8 @@ async def list_media_files(
         show_id=show_id,
         search=search,
         issue_category=issue_category,
+        media_type=media_type,
+        file_id=file_id,
     )
 
     query = select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(*filters)
@@ -810,6 +804,19 @@ async def list_media_files(
         page_size=page_size,
         pages=ceil(total / page_size) if total > 0 else 1,
     )
+
+
+@router.patch("/files/{file_id}/language-review", response_model=MediaFileResponse)
+async def update_language_review(file_id: int, request: LanguageReviewRequest,
+    current_user: Annotated[User, Depends(get_current_user)], db: Annotated[AsyncSession, Depends(get_db)]):
+    """Save a catalog note only; never change measured language or media bytes."""
+    mf = await db.scalar(select(MediaFile).options(selectinload(MediaFile.audio_tracks))
+                         .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id))
+    if mf is None:
+        raise HTTPException(status_code=404, detail="Media file not found")
+    mf.language_review_note = request.note.strip() or None
+    await db.flush()
+    return _build_media_file_response(mf)
 
 
 @router.get("/files/{file_id}", response_model=MediaFileResponse)
@@ -1041,7 +1048,9 @@ async def export_media_files(
     has_issues: Optional[bool] = None,
     show_id: Optional[int] = None,
     search: Optional[str] = None,
-    issue_category: Optional[Literal["missing_required_audio", "preferred_not_default"]] = Query(default=None),
+    issue_category: Optional[IssueCategory] = None,
+    media_type: Optional[Literal["tv", "movie", "anime"]] = None,
+    file_id: Optional[int] = None,
 ):
     """Export filtered media files in CSV or JSON format."""
     filters = _build_media_file_filters(
@@ -1050,6 +1059,8 @@ async def export_media_files(
         show_id=show_id,
         search=search,
         issue_category=issue_category,
+        media_type=media_type,
+        file_id=file_id,
     )
 
     result = await db.execute(

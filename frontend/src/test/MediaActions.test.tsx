@@ -54,7 +54,7 @@ it('uses the saved removal plan and sends an explicit manual override with an ex
   const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
   const keys = [['stats'], ['shows'], ['show', '1'], ['season', '1', 1], ['file', 1], ['scanLocations']]
   keys.forEach((key) => client.setQueryData(key, { before: true }))
-  renderWithClient(<FilesPage />, client)
+  renderWithClient(<MemoryRouter><FilesPage /></MemoryRouter>, client)
   await user.click(await screen.findByText('movie.mkv'))
   const english = screen.getByRole('checkbox', { name: 'Keep #1 EN' })
   const japanese = screen.getByRole('checkbox', { name: 'Keep #2 JA' })
@@ -80,7 +80,7 @@ it('refreshes detail and location counts after a library reset', async () => {
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   const keys = [['stats'], ['shows'], ['show', '1'], ['season', '1', 1], ['file', 1], ['scanLocations']]
   keys.forEach((key) => client.setQueryData(key, { before: true }))
-  renderWithClient(<FilesPage />, client)
+  renderWithClient(<MemoryRouter><FilesPage /></MemoryRouter>, client)
   await userEvent.click(await screen.findByRole('button', { name: /Reset Scanned Files/i }))
   await waitFor(() => expect(reset).toHaveBeenCalledTimes(1))
   await waitFor(() => expect(client.getQueryState(['scanLocations'])?.isInvalidated).toBe(true))

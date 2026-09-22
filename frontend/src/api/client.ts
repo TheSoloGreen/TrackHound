@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { FileFilters } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
@@ -65,10 +66,9 @@ export const mediaApi = {
     api.patch(`/api/media/shows/${id}`, data),
   getSeason: (showId: number, seasonNumber: number) =>
     api.get(`/api/media/shows/${showId}/seasons/${seasonNumber}`),
-  getFiles: (params?: { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string; issue_category?: 'missing_required_audio' | 'preferred_not_default' }) =>
-    api.get('/api/media/files', { params }),
-  exportFiles: (params?: { format?: 'csv' | 'json'; has_issues?: boolean; show_id?: number; search?: string; issue_category?: 'missing_required_audio' | 'preferred_not_default' }) =>
-    api.get('/api/media/files-export', { params, responseType: 'blob' }),
+  getFiles: (params?: FileFilters) => api.get('/api/media/files', { params }),
+  exportFiles: (params?: FileFilters & { format?: 'csv' | 'json' }) => api.get('/api/media/files-export', { params, responseType: 'blob' }),
+  updateLanguageReview: (id: number, note: string) => api.patch(`/api/media/files/${id}/language-review`, { note }),
   resetFiles: () => api.delete('/api/media/files'),
   getFile: (id: number) => api.get(`/api/media/files/${id}`),
   updateDefaultAudio: (id: number, language: string) =>

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from typing import Optional
+from app.core.analyzer import KNOWN_LANGUAGE_CODES
 
 
 @dataclass
@@ -58,6 +59,8 @@ class PreferenceEngine:
             issues.append("No audio tracks found")
             return issues
         
+        unknown = any((track.get("language") or "").strip().lower() not in KNOWN_LANGUAGE_CODES for track in audio_tracks)
+
         # Get languages present
         languages = set()
         default_language = None
@@ -89,6 +92,14 @@ class PreferenceEngine:
                 if not has_japanese:
                     issues.append("Missing Japanese audio for dual audio (anime)")
         
+        if unknown:
+            issues = [message.replace("Missing English audio track", "No track tagged English; audio language needs review")
+                      .replace("Missing Japanese audio track", "No track tagged Japanese; audio language needs review")
+                      .replace("Missing English audio for dual audio", "No track tagged English; audio language needs review for dual audio")
+                      .replace("Missing Japanese audio for dual audio", "No track tagged Japanese; audio language needs review for dual audio")
+                      for message in issues]
+            issues.append("Unknown or unrecognized audio language metadata")
+
         # Check default track
         if self.preferences.check_default_track and default_language:
             if is_anime:

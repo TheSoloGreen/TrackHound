@@ -1,4 +1,4 @@
-import { useParams, Link, useLocation } from 'react-router-dom'
+import { useParams, Link, useLocation, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, AlertTriangle, RefreshCw } from 'lucide-react'
 import { mediaApi } from '../api/client'
@@ -32,6 +32,7 @@ function FileRow({
   onRescan: (fileId: number) => void
   isRescanning: boolean
 }) {
+  const location = useLocation()
   return (
     <div
       className={`p-3 rounded-lg border ${
@@ -51,7 +52,8 @@ function FileRow({
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link className="text-xs text-orange-600 underline" to={`/files?${new URLSearchParams({ file_id: String(file.id), expanded: String(file.id), return_to: location.pathname + location.search })}`}>View audio details</Link>
           <button
             onClick={() => onRescan(file.id)}
             disabled={isRescanning}
@@ -84,8 +86,13 @@ function FileRow({
 export default function ShowDetailPage() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
-  const location = useLocation()
-  const [selectedSeason, setSelectedSeason] = useState<number | null>(null)
+  const [params, setParams] = useSearchParams()
+  const seasonParam = params.get('season')
+  const selectedSeason = seasonParam !== null && /^\d+$/.test(seasonParam) && Number.isSafeInteger(Number(seasonParam)) ? Number(seasonParam) : null
+  const setSelectedSeason = (season: number) => setParams((previous) => { const next = new URLSearchParams(previous); next.set('season', String(season)); return next })
+  const libraryParams = new URLSearchParams(params)
+  libraryParams.delete('season')
+  const libraryLink = `/library?${libraryParams}`
   const [rescanError, setRescanError] = useState<string | null>(null)
 
   const showId = Number(id)
@@ -155,7 +162,7 @@ export default function ShowDetailPage() {
     return (
       <div className="text-center py-12">
         <p className="text-gray-500">Title not found</p>
-        <Link to={`/library${location.search}`} className="text-orange-500 hover:underline mt-2 inline-block">
+        <Link to={libraryLink} aria-label="Back to library" className="text-orange-500 hover:underline mt-2 inline-block">
           Back to library
         </Link>
       </div>
@@ -176,9 +183,9 @@ export default function ShowDetailPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start gap-4">
+      <div className="flex flex-wrap items-start gap-4">
         <Link
-          to={`/library${location.search}`}
+          to={libraryLink} aria-label="Back to library"
           className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
         >
           <ArrowLeft className="w-5 h-5 text-gray-500" />

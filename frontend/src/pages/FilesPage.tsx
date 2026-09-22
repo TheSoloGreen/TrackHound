@@ -1,10 +1,12 @@
 import { Fragment, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import LanguageReview from '../components/LanguageReview'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Search, AlertTriangle, FileVideo, ChevronDown, ChevronUp, Download, RefreshCw, Trash2 } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { refreshLibrary } from '../api/cache'
 import { useDebounce } from '../hooks/useDebounce'
-import type { MediaFile, PaginatedResponse, AudioTrackRemovalPlan } from '../types'
+import type { MediaFile, PaginatedResponse, AudioTrackRemovalPlan, IssueCategory, MediaType } from '../types'
 import { isAxiosError } from 'axios'
 
 function AudioTrackBadge({ track }: { track: MediaFile['audio_tracks'][0] }) {
@@ -26,11 +28,27 @@ function AudioTrackBadge({ track }: { track: MediaFile['audio_tracks'][0] }) {
 }
 
 export default function FilesPage() {
-  const [page, setPage] = useState(1)
-  const [search, setSearch] = useState('')
-  const [hasIssues, setHasIssues] = useState<boolean | undefined>(undefined)
-  const [issueCategory, setIssueCategory] = useState<'missing_required_audio' | 'preferred_not_default' | undefined>(undefined)
-  const [expandedFile, setExpandedFile] = useState<number | null>(null)
+  const [params, setParams] = useSearchParams()
+  const positiveInt = (value: string | null) => value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : undefined
+  const page = positiveInt(params.get('page')) ?? 1
+  const search = params.get('search') ?? ''
+  const hasIssues = params.get('has_issues') === 'true' ? true : params.get('has_issues') === 'false' ? false : undefined
+  const categories: IssueCategory[] = ['missing_required_audio', 'preferred_not_default', 'missing_english', 'missing_japanese', 'missing_dual_audio', 'unknown_language']
+  const issueCategory = categories.includes(params.get('issue_category') as IssueCategory) ? params.get('issue_category') as IssueCategory : undefined
+  const mediaType = ['tv', 'movie', 'anime'].includes(params.get('media_type') || '') ? params.get('media_type') as MediaType : undefined
+  const fileId = positiveInt(params.get('file_id'))
+  const expandedFile = positiveInt(params.get('expanded'))
+  const returnTo = params.get('return_to')
+  const safeReturn = returnTo && /^\/library(?:\/\d+)?(?:\?[^#]*)?$/.test(returnTo) ? returnTo : null
+  const update = (values: Record<string, string | undefined>, replace = false) => {
+    setParams((previous) => {
+      const next = new URLSearchParams(previous)
+      Object.entries(values).forEach(([key, value]) => value === undefined ? next.delete(key) : next.set(key, value))
+      return next
+    }, { replace })
+  }
+  const setPage = (value: number | ((previous: number) => number)) => update({ page: String(typeof value === 'function' ? value(page) : value) })
+  const setExpandedFile = (id: number | null) => update({ expanded: id === null ? undefined : String(id) })
   const [trackKeepSelections, setTrackKeepSelections] = useState<Record<string, number[]>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [isResetting, setIsResetting] = useState(false)
@@ -79,7 +97,7 @@ export default function FilesPage() {
   })
 
   const { data, isLoading, error } = useQuery<PaginatedResponse<MediaFile>>({
-    queryKey: ['files', page, debouncedSearch, hasIssues, issueCategory],
+    queryKey: ['files', page, debouncedSearch, hasIssues, issueCategory, mediaType, fileId],
     queryFn: async () => {
       const response = await mediaApi.getFiles({
         page,
@@ -87,6 +105,8 @@ export default function FilesPage() {
         search: debouncedSearch || undefined,
         has_issues: hasIssues,
         issue_category: issueCategory,
+        media_type: mediaType,
+        file_id: fileId,
       })
       return response.data
     },
@@ -107,6 +127,8 @@ export default function FilesPage() {
         format,
         has_issues: hasIssues,
         issue_category: issueCategory,
+        media_type: mediaType,
+        file_id: fileId,
         search: debouncedSearch || undefined,
       })
 
@@ -230,26 +252,28 @@ export default function FilesPage() {
         </div>
       </div>
 
+      {safeReturn && <Link to={safeReturn} className="text-orange-600 underline">Back to title and season</Link>}
+      {fileId && <p className="text-sm">Viewing file #{fileId}. <Link className="text-orange-600 underline" to="/files">Browse all files</Link></p>}
       {/* Search and Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <div className="relative flex-1">
+      <div className="flex flex-wrap gap-4">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <input
             type="text"
+            aria-label="Search files"
             placeholder="Search files..."
             value={search}
             onChange={(e) => {
-              setSearch(e.target.value)
-              setPage(1)
+              update({ search: e.target.value || undefined, page: undefined }, true)
             }}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
           />
         </div>
         <select
+          aria-label="Issue status"
           value={hasIssues === undefined ? '' : hasIssues.toString()}
           onChange={(e) => {
-            setHasIssues(e.target.value === '' ? undefined : e.target.value === 'true')
-            setPage(1)
+            update({ has_issues: e.target.value || undefined, page: undefined })
           }}
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         >
@@ -258,21 +282,26 @@ export default function FilesPage() {
           <option value="false">No Issues</option>
         </select>
         <select
+          aria-label="Issue type"
           value={issueCategory ?? ''}
           onChange={(e) => {
-            setIssueCategory(
-              e.target.value === ''
-                ? undefined
-                : (e.target.value as 'missing_required_audio' | 'preferred_not_default')
-            )
-            setPage(1)
+            update({ issue_category: e.target.value || undefined, page: undefined })
           }}
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         >
           <option value="">All Issue Types</option>
           <option value="missing_required_audio">Missing required audio</option>
           <option value="preferred_not_default">Preferred audio not default</option>
+          <option value="missing_english">No English tag</option>
+          <option value="missing_japanese">No Japanese tag</option>
+          <option value="missing_dual_audio">Missing dual audio</option>
+          <option value="unknown_language">Unknown language</option>
         </select>
+        <select aria-label="Media type" value={mediaType || ''} onChange={(event) => update({ media_type: event.target.value || undefined, page: undefined })}
+          className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2">
+          <option value="">All media types</option><option value="movie">Movies</option><option value="tv">TV shows</option><option value="anime">Anime</option>
+        </select>
+        <button onClick={() => setParams({})} className="text-sm underline">Clear filters</button>
       </div>
 
       {/* Error message */}
@@ -288,21 +317,22 @@ export default function FilesPage() {
         </div>
       )}
 
+      <p className="text-xs text-gray-500 md:hidden">Scroll the table sideways to view all audio tracks and controls.</p>
       {/* Files Table */}
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-orange-500"></div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <table className="w-full">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-x-auto">
+          <table className="w-full min-w-[600px]">
             <thead className="bg-gray-50 dark:bg-gray-700/50">
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">File</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400 hidden md:table-cell">Size</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400">Audio Tracks</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 dark:text-gray-400 hidden lg:table-cell">Status</th>
-                <th className="w-10"></th>
+                <th className="relative w-10"><span className="sr-only">Details</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -312,14 +342,15 @@ export default function FilesPage() {
                     className={`hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer ${
                       file.has_issues ? 'bg-red-50/50 dark:bg-red-900/10' : ''
                     }`}
-                    onClick={() => setExpandedFile(expandedFile === file.id ? null : file.id)}
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <FileVideo className="w-5 h-5 text-gray-400 flex-shrink-0" />
-                        <span className="text-sm text-gray-900 dark:text-white truncate max-w-xs">
+                        <button type="button" aria-label={`Audio details for ${file.filename}`} aria-expanded={expandedFile === file.id}
+                          aria-controls={`file-details-${file.id}`} onClick={() => setExpandedFile(expandedFile === file.id ? null : file.id)}
+                          className="text-left text-sm text-gray-900 dark:text-white max-w-xs break-words underline decoration-dotted">
                           {file.filename}
-                        </span>
+                        </button>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 hidden md:table-cell">
@@ -354,7 +385,7 @@ export default function FilesPage() {
                     </td>
                   </tr>
                   {expandedFile === file.id && (
-                    <tr className="bg-gray-50 dark:bg-gray-700/30">
+                    <tr id={`file-details-${file.id}`} className="bg-gray-50 dark:bg-gray-700/30">
                       <td colSpan={5} className="px-4 py-4">
                         <div className="space-y-3">
                           <div>
@@ -442,11 +473,13 @@ export default function FilesPage() {
                                 : 'Remove Unchecked Tracks'}
                             </button>
                           </div>
+                          <LanguageReview key={file.id} file={file} />
                           <div>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Audio Tracks:</span>
                             <div className="mt-2 space-y-2">
                               {file.audio_tracks.map((track) => (
-                                <div key={track.id} className="flex items-center gap-4 text-sm">
+                                <div key={track.id} className="flex flex-wrap items-center gap-2 text-sm">
+                                  <span>#{track.track_index} · Raw language: {track.language_raw || 'not tagged'}</span>
                                   <AudioTrackBadge track={track} />
                                   <span className="text-gray-600 dark:text-gray-400">
                                     {track.codec} • {track.channel_layout || `${track.channels}ch`}
@@ -467,7 +500,7 @@ export default function FilesPage() {
           </table>
           {data?.items.length === 0 && (
             <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-              No files found
+              {fileId ? 'File not found or unavailable with these filters.' : 'No files found'}
             </div>
           )}
         </div>
@@ -475,11 +508,11 @@ export default function FilesPage() {
 
       {/* Pagination */}
       {data && data.pages > 1 && (
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="text-sm text-gray-600 dark:text-gray-400">
             Showing {(page - 1) * 25 + 1} - {Math.min(page * 25, data.total)} of {data.total} files
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page === 1}
@@ -492,6 +525,7 @@ export default function FilesPage() {
             </span>
             <label className="text-sm text-gray-600 dark:text-gray-400">Jump to</label>
             <input
+              aria-label="Page number"
               type="number"
               min={1}
               max={data.pages}
