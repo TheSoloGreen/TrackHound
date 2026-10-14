@@ -35,6 +35,9 @@ from app.models.schemas import (
 )
 from app.services.exporter import Exporter
 from app.core.issue_filters import issue_predicate
+from app.core.artwork import artwork_reference, artwork_url
+from app.core.encryption import decrypt_value
+from app.core.plex_connector import artwork_connector, PlexArtworkError
 from app.models.schemas import IssueCategory, LanguageReviewRequest
 
 router = APIRouter()
@@ -538,7 +541,7 @@ async def list_shows(
                 base_media_type=show.base_media_type,
                 is_anime=show.is_anime,
                 anime_source=show.anime_source,
-                thumb_url=show.thumb_url,
+                thumb_url=artwork_url(show),
                 season_count=season_count,
                 episode_count=episode_count,
                 file_count=direct_files,
@@ -555,6 +558,27 @@ async def list_shows(
         page_size=page_size,
         pages=ceil(total / page_size) if total > 0 else 1,
     )
+
+
+@router.get("/shows/{show_id}/artwork")
+async def get_show_artwork(
+    show_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    show = await db.scalar(select(Show).where(Show.id == show_id, Show.user_id == current_user.id))
+    reference = artwork_reference(show.thumb_url) if show else None
+    if reference is None:
+        raise HTTPException(status_code=404, detail="Artwork not found")
+    if not current_user.plex_token:
+        raise HTTPException(status_code=503, detail="Connect Plex to load artwork.")
+    try:
+        token = decrypt_value(current_user.plex_token)
+        content, content_type = await asyncio.to_thread(artwork_connector(token).fetch_artwork, reference)
+    except (ValueError, PlexArtworkError):
+        raise HTTPException(status_code=503, detail="Plex artwork is unavailable.") from None
+    return Response(content=content, media_type=content_type,
+                    headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/shows/{show_id}", response_model=ShowDetailResponse)
@@ -628,7 +652,7 @@ async def get_show(
         base_media_type=show.base_media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
-        thumb_url=show.thumb_url,
+        thumb_url=artwork_url(show),
         season_count=len(season_responses),
         episode_count=total_episode_count,
         file_count=len(media_file_responses),
@@ -706,7 +730,7 @@ async def update_show(
         base_media_type=show.base_media_type,
         is_anime=show.is_anime,
         anime_source=show.anime_source,
-        thumb_url=show.thumb_url,
+        thumb_url=artwork_url(show),
         season_count=season_count,
         episode_count=episode_count,
         file_count=file_count,

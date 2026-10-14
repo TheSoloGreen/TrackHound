@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError
 from app.models.database import async_session_maker
 from app.models.entities import MediaFile, Show, Season, ScanLocation, AudioTrack
 from app.core.analyzer import AudioAnalyzer, require_successful_analysis
+from app.core.artwork import artwork_reference
 from app.core.media_access import get_media_edit_capabilities
 from app.core.plex_connector import PlexConnector
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
@@ -252,11 +253,18 @@ class MediaScanner:
         title = metadata.get("title") if metadata else info["show"]
         rating_key = metadata.get("plex_rating_key") if metadata else None
         show = await db.scalar(select(Show).where(Show.id == existing.show_id, Show.user_id == user_id)) if existing and existing.show_id else None
+        if show and rating_key and show.plex_rating_key and show.plex_rating_key != rating_key:
+            # A replaced file or historically merged remake must follow its own identity.
+            show = None
         if not show and rating_key:
             show = await db.scalar(select(Show).where(Show.plex_rating_key == rating_key, Show.user_id == user_id, Show.base_media_type == base_type).order_by(Show.id).limit(1))
         if not show and title:
-            show = await db.scalar(select(Show).where(Show.user_id == user_id, Show.title.in_([title, info["show"]]),
-                                                     Show.base_media_type == base_type).order_by(Show.id).limit(1))
+            candidates = (await db.scalars(select(Show).where(
+                Show.user_id == user_id, Show.title.in_([title, info["show"]]),
+                Show.base_media_type == base_type, Show.plex_rating_key.is_(None)
+            ).order_by(Show.id).limit(2))).all()
+            # Local enrichment is permitted only when one unclaimed title matches.
+            show = candidates[0] if len(candidates) == 1 else None
 
         # An anime location forces anime; other locations allow automatic hints.
         # Manual positive and negative overrides win, including before auto-fix.
@@ -277,7 +285,7 @@ class MediaScanner:
             if metadata:
                 show.title = title
                 show.plex_rating_key = rating_key
-                show.thumb_url = metadata.get("thumb_url")
+                show.thumb_url = artwork_reference(metadata.get("thumb_url"))
             await db.flush()
 
         if not prepared["fixed"]:

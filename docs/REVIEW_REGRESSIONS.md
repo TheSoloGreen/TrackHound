@@ -1,5 +1,29 @@
 # Library review regression checks
 
+## Catalog correctness and artwork credentials
+
+Migration `0007_artwork_security` replaces stored Plex poster URLs with thumbnail
+paths and removes Plex-token query parameters from public avatar URLs. Invalid
+poster references are cleared; another Plex-enriched scan can refresh them.
+Browser-visible poster URLs point to TrackHound, whose artwork endpoint verifies
+the active account's catalog ownership. The frontend fetches posters with its
+current session and displays a fallback if Plex is unavailable. Artwork requests
+are size-limited, accept raster images only, and do not follow upstream redirects.
+
+Distinct Plex identities are no longer merged by title. Run a **Full scan** with
+Plex connected to separate historically merged movies and refresh stored language
+results. Incremental scans continue to skip unchanged files. Existing review
+notes stay with their file records; this upgrade does not modify media files.
+
+Regional language tags normalize to their primary language. Title-based hints
+must contain explicit language names, bounded three-letter codes, or bracketed
+two-letter labels. Conflicting hints remain unknown; original tags and titles
+remain available for review.
+
+Focused coverage: `test_artwork_security.py`, `test_movie_identity.py`,
+`test_language_analysis.py`, the artwork upgrade test in
+`test_database_migrations.py`, and frontend `ShowArtwork.test.tsx`.
+
 ## Upgrade and scan behavior
 
 The normal database upgrade adds the nullable `language_review_note` column in

@@ -24,7 +24,7 @@ from app.core.scanner import MediaScanner
 from app.core.scan_state import scan_state_manager
 from app.migrations.schema_v1 import metadata as current_legacy
 from app.models.engine import create_database_engine
-from app.models.entities import Base, MediaFile, User
+from app.models.entities import Base, MediaFile, User, Show
 from app.models.migrations import upgrade_database, _set_sqlite_foreign_keys
 from fixtures.legacy_initial import Base as Initial
 from fixtures.legacy_pre_ownership import Base as PreOwnership
@@ -87,12 +87,35 @@ async def seed_legacy(engine, version):
 
 async def assert_upgraded(engine):
     async with engine.connect() as connection:
-        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0006_instance_auth"
+        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007_artwork_security"
         diffs = await connection.run_sync(lambda sync: compare_metadata(MigrationContext.configure(sync), Base.metadata))
         assert diffs == []
         if connection.dialect.name == "sqlite":
             assert await connection.scalar(text("PRAGMA foreign_keys")) == 1
             assert not (await connection.execute(text("PRAGMA foreign_key_check"))).all()
+
+
+@pytest.mark.asyncio
+async def test_artwork_upgrade_removes_credentials_and_is_idempotent(database):
+    await upgrade_database(database, "0006_instance_auth")
+    sessions = async_sessionmaker(database, expire_on_commit=False)
+    async with sessions() as db:
+        owner = User(plex_username="artwork-owner", plex_token="retained-token",
+                     plex_thumb_url="https://avatar.invalid/a?size=80&x-plex-token=synthetic")
+        db.add(owner)
+        await db.flush()
+        db.add(Show(user_id=owner.id, title="Movie", thumb_url="https://plex.invalid/library/metadata/12/thumb/1?X-Plex-Token=synthetic"))
+        db.add(Show(user_id=owner.id, title="Unsafe", thumb_url="https://untrusted.invalid/arbitrary?X-Plex-Token=synthetic"))
+        await db.commit()
+    await upgrade_database(database)
+    await upgrade_database(database)
+    await assert_upgraded(database)
+    async with sessions() as db:
+        thumbs = dict((await db.execute(select(Show.title, Show.thumb_url))).all())
+        assert thumbs == {"Movie": "/library/metadata/12/thumb/1", "Unsafe": None}
+        owner = await db.scalar(select(User))
+        assert owner.plex_thumb_url == "https://avatar.invalid/a?size=80"
+        assert owner.plex_token == "retained-token"
 
 
 @pytest.mark.asyncio

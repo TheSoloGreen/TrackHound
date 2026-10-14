@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.encryption import encrypt_value
+from app.core.artwork import public_avatar_url
 from app.models.database import get_db
 from app.models.entities import User, InstanceSettings
 from app.models.schemas import PlexPinResponse, TokenResponse, UserResponse, PasswordLogin, AccountUpdate, AuthModeUpdate
@@ -336,7 +337,7 @@ async def _complete_plex_login(pin_id, db, link_user=None):
         await require_login_plex_user(plex_user_id, db)
         plex_username = plex_user.get("username", plex_user.get("title", "Unknown"))
         plex_email = plex_user.get("email")
-        plex_thumb = plex_user.get("thumb")
+        plex_thumb = public_avatar_url(plex_user.get("thumb"))
 
         # Find or create user
         result = await db.execute(
