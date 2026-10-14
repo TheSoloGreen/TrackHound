@@ -70,6 +70,8 @@ export const mediaApi = {
   getStats: () => api.get('/api/media/stats'),
   getShows: (params?: { page?: number; page_size?: number; media_type?: string; is_anime?: boolean; has_issues?: boolean; search?: string }) =>
     api.get('/api/media/shows', { params }),
+  getArtwork: (id: number, signal?: AbortSignal) =>
+    api.get<Blob>(`/api/media/shows/${id}/artwork`, { responseType: 'blob', signal }),
   getShow: (id: number) => api.get(`/api/media/shows/${id}`),
   updateShow: (id: number, data: { media_type?: string; is_anime?: boolean; anime_source?: string }) =>
     api.patch(`/api/media/shows/${id}`, data),

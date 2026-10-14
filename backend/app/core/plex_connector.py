@@ -3,10 +3,27 @@
 import logging
 import os
 import re
+from functools import lru_cache
+from threading import Lock
 from typing import Optional
 from dataclasses import dataclass, field
 
+from app.core.artwork import artwork_reference
+
 logger = logging.getLogger(__name__)
+
+
+class PlexArtworkError(RuntimeError):
+    """Artwork failures expose no upstream URLs, credentials, or response bodies."""
+
+
+MAX_ARTWORK_BYTES = 5 * 1024 * 1024
+
+
+@lru_cache(maxsize=32)
+def artwork_connector(token: str):
+    """Reuse bounded in-memory connections so each poster need not rediscover Plex."""
+    return PlexConnector(token)
 
 
 @dataclass
@@ -49,11 +66,41 @@ class PlexConnector:
         self.token = token
         self.server_url = server_url
         self._server = None
+        self._connection_lock = Lock()
         self._library_loaded = False
         self._shows_cache: dict[str, PlexShow] = {}  # title variant -> show
         self._file_path_cache: dict[str, PlexShow] = {}  # normalized path -> show
         self._shows_by_key: dict[str, PlexShow] = {}  # rating_key -> show
         self._movies: Optional[list[PlexShow]] = None
+
+    def fetch_artwork(self, reference: str) -> tuple[bytes, str]:
+        path = artwork_reference(reference)
+        if path is None:
+            raise PlexArtworkError("Artwork is unavailable.")
+        try:
+            server = self._get_server()
+            # Use the selected Plex connection, never a host supplied by catalog data.
+            # Server access tokens can differ from the account's login token.
+            with server._session.get(server.url(path, includeToken=False),
+                                     headers=server._headers(), timeout=10,
+                                     stream=True, allow_redirects=False) as response:
+                content_type = response.headers.get("Content-Type", "").split(";", 1)[0].lower()
+                if response.status_code != 200 or content_type not in {
+                    "image/jpeg", "image/png", "image/webp", "image/gif"
+                }:
+                    raise PlexArtworkError("Artwork is unavailable.")
+                chunks, size = [], 0
+                for chunk in response.iter_content(chunk_size=65536):
+                    size += len(chunk)
+                    if size > MAX_ARTWORK_BYTES:
+                        raise PlexArtworkError("Artwork is unavailable.")
+                    chunks.append(chunk)
+                if not size:
+                    raise PlexArtworkError("Artwork is unavailable.")
+                return b"".join(chunks), content_type
+        except Exception:
+            # Requests/Plex exceptions may contain authenticated response URLs.
+            raise PlexArtworkError("Artwork is unavailable.") from None
 
     def sync_movie_metadata(self, file_path: str, title_from_path: Optional[str] = None) -> Optional[dict]:
         """Match only movies, preferring exact paths and unambiguous title/year pairs."""
@@ -68,7 +115,8 @@ class PlexConnector:
                         rating_key=str(movie.ratingKey), title=movie.title,
                         original_title=getattr(movie, "originalTitle", None),
                         year=getattr(movie, "year", None), genres=genres,
-                        thumb_url=getattr(movie, "thumbUrl", None), is_anime=self._is_anime(genres),
+                        thumb_url=artwork_reference(getattr(movie, "thumb", None) or getattr(movie, "thumbUrl", None)),
+                        is_anime=self._is_anime(genres),
                         file_paths=[part.file for media in (getattr(movie, "media", None) or [])
                                     for part in media.parts if part.file],
                     ))
@@ -92,6 +140,10 @@ class PlexConnector:
                 "thumb_url": movie.thumb_url, "is_anime": movie.is_anime}
 
     def _get_server(self):
+        with self._connection_lock:
+            return self._connect_server()
+
+    def _connect_server(self):
         """Get or create Plex server connection."""
         if self._server is not None:
             return self._server
@@ -245,7 +297,7 @@ class PlexConnector:
                     original_title=original_title,
                     year=getattr(show, 'year', None),
                     genres=genres,
-                    thumb_url=show.thumbUrl if hasattr(show, 'thumbUrl') else None,
+                    thumb_url=artwork_reference(getattr(show, "thumb", None) or getattr(show, "thumbUrl", None)),
                     is_anime=is_anime,
                     file_paths=file_paths,
                     title_variants=title_variants,

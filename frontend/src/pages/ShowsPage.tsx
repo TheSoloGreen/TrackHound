@@ -4,6 +4,7 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Search, AlertTriangle, ChevronRight } from 'lucide-react'
 import { mediaApi } from '../api/client'
 import { useDebounce } from '../hooks/useDebounce'
+import ShowArtwork from '../components/ShowArtwork'
 import type { Show, PaginatedResponse, MediaType } from '../types'
 
 const MEDIA_TYPE_BADGE: Record<MediaType, { label: string; classes: string }> = {
@@ -148,6 +149,9 @@ export default function ShowsPage() {
           <div className="divide-y divide-gray-200 dark:divide-gray-700">
             {data?.items.map((show) => {
               const badge = MEDIA_TYPE_BADGE[show.media_type] || MEDIA_TYPE_BADGE.tv
+              const posterFallback = <div className="w-16 h-24 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                <span className="text-2xl font-bold text-gray-400">{show.title[0]}</span>
+              </div>
               return (
                 <Link
                   key={show.id}
@@ -155,18 +159,8 @@ export default function ShowsPage() {
                   className="flex items-center gap-4 p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                 >
                   {show.thumb_url ? (
-                    <img
-                      src={show.thumb_url}
-                      alt={show.title}
-                      className="w-16 h-24 object-cover rounded-lg"
-                    />
-                  ) : (
-                    <div className="w-16 h-24 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
-                      <span className="text-2xl font-bold text-gray-400">
-                        {show.title[0]}
-                      </span>
-                    </div>
-                  )}
+                    <ShowArtwork id={show.id} alt={show.title} fallback={posterFallback} />
+                  ) : posterFallback}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold text-gray-900 dark:text-white truncate">

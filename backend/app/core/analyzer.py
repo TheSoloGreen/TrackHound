@@ -1,6 +1,7 @@
 """Audio track analyzer using pymediainfo."""
 
 from typing import Optional
+import re
 
 
 class AudioAnalysisError(RuntimeError):
@@ -81,6 +82,9 @@ def normalize_language(lang_code: Optional[str]) -> Optional[str]:
         return None
     
     code = lang_code.lower().strip()
+    # Regional/script subtags do not change the audio's primary language.
+    if re.fullmatch(r"[a-z]{2,3}(?:[-_][a-z0-9]{2,8})+", code):
+        code = re.split(r"[-_]", code, maxsplit=1)[0]
     
     # Already ISO 639-1
     if code in KNOWN_LANGUAGE_CODES:
@@ -92,6 +96,20 @@ def normalize_language(lang_code: Optional[str]) -> Optional[str]:
     
     # Return original if unknown (might be valid ISO 639-1)
     return None
+
+
+def infer_language_from_title(title: Optional[str]) -> Optional[str]:
+    """Accept explicit language hints, but leave conflicting hints unresolved."""
+    if not title:
+        return None
+    value = title.lower().strip()
+    matches = {code for name, code in LANGUAGE_MAP.items() if code and
+               re.search(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", value)}
+    # Two-letter codes can be ordinary words (it, no, hi); require a label.
+    for code in KNOWN_LANGUAGE_CODES:
+        if re.search(r"[\[(]\s*" + code + r"\s*[\])]", value):
+            matches.add(code)
+    return matches.pop() if len(matches) == 1 else None
 
 
 def parse_channel_layout(channels: int, layout: Optional[str] = None) -> str:
@@ -170,12 +188,8 @@ class AudioAnalyzer:
                     
                     # Try to detect language from title if not set
                     detected_lang = normalize_language(language_raw)
-                    if not detected_lang and track.title:
-                        title_lower = track.title.lower()
-                        for lang_name, code in LANGUAGE_MAP.items():
-                            if lang_name in title_lower and code:
-                                detected_lang = code
-                                break
+                    if not detected_lang:
+                        detected_lang = infer_language_from_title(track.title)
                     
                     channels = getattr(track, 'channel_s', None) or 2
                     channel_layout = getattr(track, 'channel_layout', None)

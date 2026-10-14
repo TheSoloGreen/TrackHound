@@ -4,7 +4,8 @@ from app.core.plex_connector import PlexConnector
 
 
 def movie(key, title, year, path):
-    return NS(ratingKey=key, title=title, year=year, genres=[], thumbUrl=f'poster-{key}',
+    return NS(ratingKey=key, title=title, year=year, genres=[],
+              thumbUrl=f'https://plex.invalid/library/metadata/{key}/thumb/1?X-Plex-Token=synthetic',
               media=[NS(parts=[NS(file=path)])])
 
 
@@ -19,7 +20,7 @@ def connector(*movies):
 def test_movie_paths_win_and_do_not_use_tv_cache():
     client = connector(movie(1, 'Movie', 2000, '/plex/movie.mkv'))
     assert client.sync_movie_metadata('/plex/movie.mkv', 'Different filename')['plex_rating_key'] == '1'
-    assert client.sync_movie_metadata('/mount/Movie (2000).mkv', 'Movie (2000)')['thumb_url'] == 'poster-1'
+    assert client.sync_movie_metadata('/mount/Movie (2000).mkv', 'Movie (2000)')['thumb_url'] == '/library/metadata/1/thumb/1'
     client._server.library.sections.assert_called_once()
 
 
