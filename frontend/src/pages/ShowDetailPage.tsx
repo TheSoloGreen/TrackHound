@@ -21,6 +21,18 @@ const MEDIA_TYPE_BADGE: Record<MediaType, { label: string; classes: string }> = 
   },
 }
 
+function classificationReason(show: ShowDetail): string {
+  if (show.anime_source === 'manual') {
+    return show.is_anime ? 'Marked as anime manually.' : 'Marked as non-anime manually.'
+  }
+  if (!show.is_anime) return 'No configured anime detection rule matched.'
+  return ({
+    location: 'Classified as anime by the scan location.',
+    folder: 'Classified as anime by a configured folder keyword.',
+    plex_genre: 'Classified as anime by a configured Plex genre.',
+  } as Record<string, string>)[show.anime_source ?? ''] ?? 'Anime classification source is unknown; review this title.'
+}
+
 function FileRow({
   file,
   showEpisodeNumber,
@@ -206,6 +218,9 @@ export default function ShowDetailPage() {
                 • {show.issues_count} issue{show.issues_count !== 1 ? 's' : ''}
               </span>
             )}
+          </p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1" aria-label="Classification reason">
+            {classificationReason(show)}
           </p>
         </div>
         <div className="flex items-center gap-2">

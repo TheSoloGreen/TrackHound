@@ -24,7 +24,7 @@ from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import set_default_track_by_index
 from app.models.schemas import AnimeDetectionSettings, normalize_file_extensions
 from app.core.user_settings import load_user_settings
-from app.core.classification import classify_show
+from app.core.classification import anime_folder_match, classify_show
 from app.core.scan_state import scan_state_manager
 
 logger = logging.getLogger(__name__)
@@ -113,10 +113,10 @@ class MediaScanner:
     def __init__(self, extensions=None, plex_token=None, audio_preferences=None, anime_detection=None):
         self.extensions = set(normalize_file_extensions(list(extensions))) if extensions is not None else DEFAULT_EXTENSIONS
         self.analyzer = AudioAnalyzer()
-        self.plex_connector = PlexConnector(plex_token) if plex_token else None
+        self.anime_detection = anime_detection or AnimeDetectionSettings()
+        self.plex_connector = PlexConnector(plex_token, anime_genres=self.anime_detection.anime_genres) if plex_token else None
         self.plex_failed = False
         self.preference_engine = PreferenceEngine(audio_preferences)
-        self.anime_detection = anime_detection or AnimeDetectionSettings()
 
     def _get_english_default_fix_index(self, audio_tracks: list[dict]) -> Optional[int]:
         """Return the English track index to promote as default, if needed."""
@@ -268,7 +268,7 @@ class MediaScanner:
 
         # An anime location forces anime; other locations allow automatic hints.
         # Manual positive and negative overrides win, including before auto-fix.
-        folder_hint = any(keyword in str(Path(file_path).parent).lower() for keyword in self.anime_detection.anime_folder_keywords)
+        folder_hint = anime_folder_match(file_path, self.anime_detection.anime_folder_keywords)
         plex_hint = bool(self.anime_detection.use_plex_genres and metadata and metadata.get("is_anime"))
         is_anime = media_type == "anime" or folder_hint or plex_hint
         source = "location" if media_type == "anime" else "folder" if folder_hint else "plex_genre" if plex_hint else None

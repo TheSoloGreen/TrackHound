@@ -1,5 +1,29 @@
 # Library review regression checks
 
+## Anime classification
+
+Plex genre detection now requires an exact match against the configured anime
+genre labels. The defaults are `Anime` and `アニメ`; `Animation` and
+`Japanese Animation` do not classify a title as anime unless explicitly added in
+Settings. An empty genre list disables genre hints. TV and movie enrichment use
+the same mapping.
+
+The default folder keyword is now `anime`. Folder detection matches whole terms,
+including space, hyphen, and underscore separators, so `NotAnime` and a filename
+containing `anime` do not trigger it. Saved custom keywords are preserved. If an
+older installation still has `animation` in its saved keywords, remove it in
+Settings to stop treating those folders as anime.
+
+Run a **Full scan** after adjusting detection settings to refresh unchanged
+titles and their audio issues. Explicit anime locations and manual positive or
+negative overrides retain precedence. The title detail page explains whether
+classification came from a manual choice, scan location, folder keyword, or
+Plex genre. This classification change does not itself edit media.
+
+Focused coverage: `test_anime_classification.py`, saved genre mapping scans and
+manual override cases in `test_scanner_run_scan.py`, and frontend
+`PreferencesForm.test.tsx` and `MediaActions.test.tsx`.
+
 ## Catalog correctness and artwork credentials
 
 Migration `0007_artwork_security` replaces stored Plex poster URLs with thumbnail

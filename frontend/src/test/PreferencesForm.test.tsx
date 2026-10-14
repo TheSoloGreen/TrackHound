@@ -6,6 +6,24 @@ import PreferencesForm from '../components/PreferencesForm'
 import { deferred, makeClient, renderWithClient, settings } from './helpers'
 
 describe('preference saves', () => {
+  it('saves configurable anime genres and permits disabling all genre hints', async () => {
+    const update = vi.spyOn(settingsApi, 'update')
+      .mockImplementation(async (data) => ({ data }) as Awaited<ReturnType<typeof settingsApi.update>>)
+    const user = userEvent.setup()
+    renderWithClient(<PreferencesForm initialSettings={settings} />)
+    const genres = screen.getByLabelText('Plex genres indicating anime')
+    expect(genres).toHaveValue('anime, アニメ')
+    await user.clear(genres)
+    await user.type(genres, 'Japanese Animation, Anime')
+    await user.click(screen.getByRole('button', { name: 'Save preferences' }))
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Preferences saved'))
+    expect(update.mock.calls[0][0]).toMatchObject({ anime_detection: { anime_genres: ['Japanese Animation', 'Anime'] } })
+    await user.clear(genres)
+    await user.click(screen.getByRole('button', { name: 'Save preferences' }))
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+    expect(update.mock.calls[1][0]).toMatchObject({ anime_detection: { anime_genres: [] } })
+  })
+
   it('keeps rapid typing local, serializes saves, and retains edits made during a delayed response', async () => {
     const first = deferred<Awaited<ReturnType<typeof settingsApi.update>>>()
     const update = vi.spyOn(settingsApi, 'update').mockReturnValueOnce(first.promise)

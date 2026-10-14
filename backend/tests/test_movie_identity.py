@@ -15,7 +15,7 @@ async def test_remakes_keep_distinct_identities_across_full_rescans(library, mon
         location = await db.get(type(library.location), library.location.id)
         location.media_type = "movie"
         await db.commit()
-    monkeypatch.setattr(scanner, "PlexConnector", lambda _: NS(sync_movie_metadata=lambda file_path, title_from_path: {
+    monkeypatch.setattr(scanner, "PlexConnector", lambda _, **_settings: NS(sync_movie_metadata=lambda file_path, title_from_path: {
         "title": "Dune", "plex_rating_key": "1" if "1984" in file_path else "2", "is_anime": False}))
     assert (await run(library, token="synthetic")).outcome == "completed"
     first_ids = [file.show_id for file in await files(library)]
@@ -36,7 +36,7 @@ async def test_enrichment_preserves_local_title_and_replacement_changes_identity
     await run(library)
     local_id = (await files(library))[0].show_id
     metadata = {"title": "Movie", "plex_rating_key": "1", "is_anime": False}
-    monkeypatch.setattr(scanner, "PlexConnector", lambda _: NS(sync_movie_metadata=lambda **_: metadata))
+    monkeypatch.setattr(scanner, "PlexConnector", lambda _, **_settings: NS(sync_movie_metadata=lambda **_: metadata))
     await run(library, token="synthetic")
     assert (await files(library))[0].show_id == local_id
     metadata["plex_rating_key"] = "2"

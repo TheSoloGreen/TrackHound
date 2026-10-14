@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from threading import Event
 from fastapi import BackgroundTasks
 
@@ -155,6 +155,36 @@ async def test_saved_plex_genre_toggle_controls_classification(library, use_genr
         assert show.is_anime is use_genres
         assert show.media_type == ("anime" if use_genres else "tv")
         assert show.anime_source == ("plex_genre" if use_genres else None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("genre, configured, enabled, expected", [
+    ("Animation", ["anime", "アニメ"], True, False),
+    ("Anime", ["anime", "アニメ"], True, True),
+    ("Japanese Animation", ["japanese animation"], True, True),
+    ("Anime", [], True, False),
+    ("Anime", ["anime"], False, False),
+])
+async def test_saved_genre_mapping_controls_real_plex_scan_and_audio_rules(library, genre, configured, enabled, expected):
+    source = write_media(library.root)
+    saved = await settings(library, anime_detection={
+        "use_plex_genres": enabled, "anime_genres": configured, "anime_folder_keywords": []
+    })
+    assert saved.anime_detection.anime_genres == configured
+    plex_show = SimpleNamespace(ratingKey=12, title="Example", genres=[SimpleNamespace(tag=genre)],
+        episodes=Mock(return_value=[SimpleNamespace(media=[SimpleNamespace(parts=[SimpleNamespace(file=str(source))])])]))
+    server = SimpleNamespace(library=SimpleNamespace(sections=Mock(return_value=[
+        SimpleNamespace(type="show", all=Mock(return_value=[plex_show]))
+    ])))
+    with patch.object(scanning.PlexConnector, "_get_server", return_value=server):
+        status = await run(library, token="synthetic")
+    assert status.error_count == 0
+    async with library.sessions() as db:
+        show = await db.scalar(select(Show))
+        record = await db.scalar(select(MediaFile))
+        assert show.is_anime is expected
+        assert show.anime_source == ("plex_genre" if expected else None)
+        assert record.has_issues is expected  # English-only Western animation uses non-anime rules.
 
 
 @pytest.mark.asyncio

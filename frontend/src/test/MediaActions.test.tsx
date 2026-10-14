@@ -29,6 +29,7 @@ it.each(['tv', 'movie'] as const)('marks and unmarks %s consistently and refresh
   </Routes></MemoryRouter>, client)
   await user.click(await screen.findByRole('button', { name: 'Mark as Anime' }))
   expect(await screen.findByText('Anime', { selector: 'span' })).toBeVisible()
+  expect(screen.getByLabelText('Classification reason')).toHaveTextContent('Marked as anime manually.')
   expect(screen.getByText('• 1 issue')).toBeVisible()
   keys.forEach((key) => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
   if (base === 'movie') {
@@ -38,6 +39,7 @@ it.each(['tv', 'movie'] as const)('marks and unmarks %s consistently and refresh
   await waitFor(() => expect(screen.getByRole('button', { name: 'Unmark as Anime' })).toBeEnabled())
   await user.click(screen.getByRole('button', { name: 'Unmark as Anime' }))
   expect(await screen.findByText(base === 'movie' ? 'Movie' : 'TV Show', { selector: 'span' })).toBeVisible()
+  expect(screen.getByLabelText('Classification reason')).toHaveTextContent('Marked as non-anime manually.')
   expect(screen.queryByText('• 1 issue')).not.toBeInTheDocument()
   expect(update).toHaveBeenCalledTimes(2)
 })

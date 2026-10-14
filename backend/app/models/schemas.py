@@ -340,12 +340,13 @@ class AnimeDetectionSettings(BaseModel):
     """Anime detection configuration."""
 
     use_plex_genres: bool = True
-    anime_folder_keywords: list[str] = ["anime", "animation"]
+    anime_genres: list[str] = ["anime", "アニメ"]
+    anime_folder_keywords: list[str] = ["anime"]
 
-    @field_validator("anime_folder_keywords")
+    @field_validator("anime_folder_keywords", "anime_genres")
     @classmethod
     def normalize_keywords(cls, keywords):
-        return list(dict.fromkeys(keyword.strip().lower() for keyword in keywords if keyword.strip()))
+        return list(dict.fromkeys(keyword.strip().casefold() for keyword in keywords if keyword.strip()))
 
 
 def normalize_file_extensions(extensions):

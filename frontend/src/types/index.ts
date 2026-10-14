@@ -147,6 +147,7 @@ export interface AudioPreferences {
 
 export interface AnimeDetectionSettings {
   use_plex_genres: boolean
+  anime_genres: string[]
   anime_folder_keywords: string[]
 }
 
