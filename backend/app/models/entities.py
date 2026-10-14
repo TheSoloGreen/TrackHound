@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text, Index, UniqueConstraint, CheckConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, BigInteger, Text, Index, UniqueConstraint, CheckConstraint, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -181,6 +181,7 @@ class MediaFile(Base):
     last_modified: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     has_issues: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    issue_evaluation_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     language_review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
@@ -194,6 +195,21 @@ class MediaFile(Base):
     audio_tracks: Mapped[list["AudioTrack"]] = relationship(
         "AudioTrack", back_populates="media_file", cascade="all, delete-orphan"
     )
+    issue_records: Mapped[list["MediaIssue"]] = relationship(
+        "MediaIssue", cascade="all, delete-orphan", lazy="selectin", order_by="MediaIssue.code"
+    )
+
+
+class MediaIssue(Base):
+    """Stable issue codes and evidence, independent of display wording."""
+
+    __tablename__ = "media_issues"
+    __table_args__ = (Index("ix_media_issues_code_file", "code", "media_file_id"),)
+    media_file_id: Mapped[int] = mapped_column(ForeignKey("media_files.id", ondelete="CASCADE"), primary_key=True)
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
 
 class AudioTrack(Base):

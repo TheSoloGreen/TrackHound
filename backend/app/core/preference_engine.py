@@ -1,14 +1,16 @@
-"""Preference engine for evaluating audio track rules."""
+"""One structured audio evaluator used by scans, edits, summaries, and reports."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Optional
-from app.core.analyzer import KNOWN_LANGUAGE_CODES
+
+from app.core.analyzer import normalize_language
+from app.core.audio_roles import audio_role
+
+EVALUATION_VERSION = 1
 
 
 @dataclass
 class AudioPreferences:
-    """Audio preference configuration."""
-    
     require_english_non_anime: bool = True
     require_japanese_anime: bool = True
     require_dual_audio_anime: bool = True
@@ -19,224 +21,97 @@ class AudioPreferences:
 
 @dataclass
 class Issue:
-    """Represents an issue found with a media file's audio tracks."""
-    
-    severity: str  # "error" or "warning"
+    severity: str
     code: str
     message: str
+    details: dict = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
 
 
 class PreferenceEngine:
-    """Engine for evaluating audio preferences against media files."""
-
     def __init__(self, preferences: Optional[AudioPreferences] = None):
-        """
-        Initialize preference engine.
-        
-        Args:
-            preferences: Audio preferences to use (defaults to default preferences)
-        """
         self.preferences = preferences or AudioPreferences()
 
-    def evaluate(
-        self,
-        audio_tracks: list[dict],
-        is_anime: bool = False,
-    ) -> list[str]:
-        """
-        Evaluate audio tracks against preferences.
-        
-        Args:
-            audio_tracks: List of audio track dicts with language, is_default, codec, etc.
-            is_anime: Whether the content is anime
-        
-        Returns:
-            List of issue messages (empty if no issues)
-        """
-        issues = []
-        
-        if not audio_tracks:
-            issues.append("No audio tracks found")
-            return issues
-        
-        unknown = any((track.get("language") or "").strip().lower() not in KNOWN_LANGUAGE_CODES for track in audio_tracks)
+    def required_languages(self, is_anime: bool = False) -> set[str]:
+        if not is_anime:
+            return {"en"} if self.preferences.require_english_non_anime else set()
+        required = {"ja"} if self.preferences.require_japanese_anime else set()
+        if self.preferences.require_dual_audio_anime:
+            required.update({"en", "ja"})
+        return required
 
-        # Get languages present
-        languages = set()
-        default_language = None
-        
-        for track in audio_tracks:
-            lang = track.get("language")
-            if lang:
-                languages.add(lang.lower())
-            if track.get("is_default"):
-                default_language = lang.lower() if lang else None
-        
-        # Check English requirement for non-anime
+    def evaluate(self, audio_tracks: list[dict], is_anime: bool = False) -> list[str]:
+        return [issue.message for issue in self.evaluate_detailed(audio_tracks, is_anime)]
+
+    def evaluate_detailed(self, audio_tracks: list[dict], is_anime: bool = False) -> list[Issue]:
+        if not audio_tracks:
+            return [Issue("error", "NO_AUDIO", "No audio tracks found")]
+        issues: list[Issue] = []
+        main = [track for track in audio_tracks if audio_role(track) == "main"]
+        languages = {normalize_language(track.get("language")) for track in main}
+        all_languages = {normalize_language(track.get("language")) for track in audio_tracks}
+        unknown = None in all_languages
+
+        def missing(language: str, code: str, message: str, *, dual=False):
+            if language in languages:
+                return
+            name = "English" if language == "en" else "Japanese"
+            if unknown:
+                message = f"No track tagged {name}; audio language needs review" + (" for dual audio (anime)" if dual else "")
+            elif language in all_languages:
+                message = f"No main {name} audio track found (only commentary or audio description)" + (" for dual audio (anime)" if dual else "")
+            issues.append(Issue("error", code, message,
+                                {"language": language, "needs_language_review": unknown, "main_audio_required": True}))
+
         if not is_anime and self.preferences.require_english_non_anime:
-            if "en" not in languages:
-                issues.append("Missing English audio track")
-        
-        # Check Japanese requirement for anime
+            missing("en", "MISSING_ENGLISH", "Missing English audio track")
         if is_anime and self.preferences.require_japanese_anime:
-            if "ja" not in languages:
-                issues.append("Missing Japanese audio track (anime)")
-        
-        # Check dual audio for anime
+            missing("ja", "MISSING_JAPANESE", "Missing Japanese audio track (anime)")
         if is_anime and self.preferences.require_dual_audio_anime:
-            has_english = "en" in languages
-            has_japanese = "ja" in languages
-            if not (has_english and has_japanese):
-                if not has_english:
-                    issues.append("Missing English audio for dual audio (anime)")
-                if not has_japanese:
-                    issues.append("Missing Japanese audio for dual audio (anime)")
-        
+            missing("en", "MISSING_DUAL_ENGLISH", "Missing English audio for dual audio (anime)", dual=True)
+            missing("ja", "MISSING_DUAL_JAPANESE", "Missing Japanese audio for dual audio (anime)", dual=True)
         if unknown:
-            issues = [message.replace("Missing English audio track", "No track tagged English; audio language needs review")
-                      .replace("Missing Japanese audio track", "No track tagged Japanese; audio language needs review")
-                      .replace("Missing English audio for dual audio", "No track tagged English; audio language needs review for dual audio")
-                      .replace("Missing Japanese audio for dual audio", "No track tagged Japanese; audio language needs review for dual audio")
-                      for message in issues]
-            issues.append("Unknown or unrecognized audio language metadata")
+            issues.append(Issue("warning", "UNKNOWN_LANGUAGE", "Unknown or unrecognized audio language metadata"))
 
-        # Check default track
-        if self.preferences.check_default_track and default_language:
-            if is_anime:
-                # For anime, default should be English or Japanese
-                if default_language not in ("en", "ja"):
-                    issues.append(f"Default audio track is '{default_language}', expected English or Japanese (anime)")
+        if self.preferences.check_default_track:
+            defaults = [track for track in audio_tracks if track.get("is_default")]
+            if not defaults:
+                issues.append(Issue("warning", "NO_DEFAULT", "No default audio track is flagged"))
+            elif len(defaults) > 1:
+                issues.append(Issue("warning", "MULTIPLE_DEFAULTS", "Multiple audio tracks are flagged as default",
+                                    {"track_indices": [track.get("index") for track in defaults]}))
             else:
-                # For non-anime, default should be English
-                if default_language != "en" and "en" in languages:
-                    issues.append(f"Default audio track is '{default_language}', expected English")
-        
-        # Check preferred codecs
+                track = defaults[0]
+                language = normalize_language(track.get("language"))
+                role = audio_role(track)
+                if role != "main":
+                    issues.append(Issue("warning", "SPECIAL_DEFAULT", "Default audio is a commentary or audio description track",
+                                        {"track_index": track.get("index"), "role": role}))
+                if is_anime and language not in ("en", "ja"):
+                    issues.append(Issue("warning", "WRONG_DEFAULT_ANIME",
+                                        f"Default audio track is '{language or 'unknown'}', expected English or Japanese (anime)"))
+                elif not is_anime and language != "en" and "en" in languages:
+                    issues.append(Issue("warning", "WRONG_DEFAULT",
+                                        f"Default audio track is '{language or 'unknown'}', expected English"))
+
         if self.preferences.preferred_codecs:
-            codecs = {track.get("codec", "").lower() for track in audio_tracks if track.get("codec")}
-            preferred_lower = {c.lower() for c in self.preferences.preferred_codecs}
-            if codecs and not (codecs & preferred_lower):
-                issues.append(f"No preferred audio codec found (has: {', '.join(codecs)})")
-        
+            codecs = {str(track.get("codec") or "").casefold() for track in main if track.get("codec")}
+            preferred = {codec.casefold() for codec in self.preferences.preferred_codecs}
+            if not (codecs & preferred):
+                issues.append(Issue("warning", "NO_PREFERRED_CODEC",
+                                    f"No preferred audio codec found (has: {', '.join(sorted(codecs)) or 'unknown'})",
+                                    {"available": sorted(codecs), "preferred": sorted(preferred)}))
         return issues
 
-    def evaluate_detailed(
-        self,
-        audio_tracks: list[dict],
-        is_anime: bool = False,
-    ) -> list[Issue]:
-        """
-        Evaluate audio tracks and return detailed issues.
-        
-        Args:
-            audio_tracks: List of audio track dicts
-            is_anime: Whether the content is anime
-        
-        Returns:
-            List of Issue objects with severity and details
-        """
-        issues = []
-        
-        if not audio_tracks:
-            issues.append(Issue(
-                severity="error",
-                code="NO_AUDIO",
-                message="No audio tracks found",
-            ))
-            return issues
-        
-        # Get languages present
-        languages = set()
-        default_language = None
-        
-        for track in audio_tracks:
-            lang = track.get("language")
-            if lang:
-                languages.add(lang.lower())
-            if track.get("is_default"):
-                default_language = lang.lower() if lang else None
-        
-        # Check English requirement for non-anime
-        if not is_anime and self.preferences.require_english_non_anime:
-            if "en" not in languages:
-                issues.append(Issue(
-                    severity="error",
-                    code="MISSING_ENGLISH",
-                    message="Missing English audio track",
-                ))
-        
-        # Check Japanese requirement for anime
-        if is_anime and self.preferences.require_japanese_anime:
-            if "ja" not in languages:
-                issues.append(Issue(
-                    severity="error",
-                    code="MISSING_JAPANESE",
-                    message="Missing Japanese audio track (anime)",
-                ))
-        
-        # Check dual audio for anime
-        if is_anime and self.preferences.require_dual_audio_anime:
-            has_english = "en" in languages
-            has_japanese = "ja" in languages
-            if not (has_english and has_japanese):
-                issues.append(Issue(
-                    severity="warning",
-                    code="MISSING_DUAL_AUDIO",
-                    message="Missing dual audio (English + Japanese) for anime",
-                ))
-        
-        # Check default track
-        if self.preferences.check_default_track and default_language:
-            if is_anime:
-                if default_language not in ("en", "ja"):
-                    issues.append(Issue(
-                        severity="warning",
-                        code="WRONG_DEFAULT_ANIME",
-                        message=f"Default audio is '{default_language}', expected English or Japanese",
-                    ))
-            else:
-                if default_language != "en" and "en" in languages:
-                    issues.append(Issue(
-                        severity="warning",
-                        code="WRONG_DEFAULT",
-                        message=f"Default audio is '{default_language}', expected English",
-                    ))
-        
-        return issues
-
-    def get_summary(
-        self,
-        audio_tracks: list[dict],
-        is_anime: bool = False,
-    ) -> dict:
-        """
-        Get a summary of the audio track evaluation.
-        
-        Returns dict with:
-            - has_issues: bool
-            - issue_count: int
-            - error_count: int
-            - warning_count: int
-            - languages: list of language codes
-            - default_language: the default track's language
-        """
+    def get_summary(self, audio_tracks: list[dict], is_anime: bool = False) -> dict:
         issues = self.evaluate_detailed(audio_tracks, is_anime)
-        
-        languages = []
-        default_language = None
-        
-        for track in audio_tracks:
-            lang = track.get("language")
-            if lang and lang not in languages:
-                languages.append(lang)
-            if track.get("is_default"):
-                default_language = lang
-        
+        defaults = [track for track in audio_tracks if track.get("is_default")]
         return {
-            "has_issues": len(issues) > 0,
-            "issue_count": len(issues),
-            "error_count": sum(1 for i in issues if i.severity == "error"),
-            "warning_count": sum(1 for i in issues if i.severity == "warning"),
-            "languages": languages,
-            "default_language": default_language,
+            "has_issues": bool(issues), "issue_count": len(issues),
+            "error_count": sum(issue.severity == "error" for issue in issues),
+            "warning_count": sum(issue.severity == "warning" for issue in issues),
+            "languages": sorted({track["language"] for track in audio_tracks if track.get("language")}),
+            "default_language": defaults[0].get("language") if len(defaults) == 1 else None,
         }

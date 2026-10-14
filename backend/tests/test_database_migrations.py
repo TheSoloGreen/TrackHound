@@ -87,7 +87,7 @@ async def seed_legacy(engine, version):
 
 async def assert_upgraded(engine):
     async with engine.connect() as connection:
-        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0007_artwork_security"
+        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0008_structured_issues"
         diffs = await connection.run_sync(lambda sync: compare_metadata(MigrationContext.configure(sync), Base.metadata))
         assert diffs == []
         if connection.dialect.name == "sqlite":
@@ -139,6 +139,25 @@ async def test_historical_upgrade_preserves_rows_and_matches_models(database, ve
 async def test_fresh_upgrade_matches_models(database):
     await upgrade_database(database)
     await assert_upgraded(database)
+
+
+@pytest.mark.asyncio
+async def test_structured_issue_upgrade_preserves_legacy_evidence(database):
+    await seed_legacy(database, "current")
+    await upgrade_database(database, "0007_artwork_security")
+    message = "No track tagged English; audio language needs review; Unknown or unrecognized audio language metadata"
+    async with database.begin() as connection:
+        await connection.execute(text("UPDATE media_files SET has_issues=:flag, issue_details=:message"),
+                                 {"flag": True, "message": message})
+    await upgrade_database(database)
+    await upgrade_database(database)
+    await assert_upgraded(database)
+    async with database.connect() as connection:
+        records = (await connection.execute(text("SELECT code, message FROM media_issues ORDER BY code"))).all()
+        assert {row.code for row in records} == {"MISSING_ENGLISH", "UNKNOWN_LANGUAGE"}
+        assert "; ".join(row.message for row in records) == message
+        assert await connection.scalar(text("SELECT issue_details FROM media_files")) == message
+        assert await connection.scalar(text("SELECT issue_evaluation_version FROM media_files")) == 0
 
 
 @pytest.mark.asyncio

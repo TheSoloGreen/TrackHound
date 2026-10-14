@@ -7,7 +7,7 @@ import { mediaApi } from '../api/client'
 import { refreshLibrary } from '../api/cache'
 import { useDebounce } from '../hooks/useDebounce'
 import type { MediaFile, PaginatedResponse, AudioTrackRemovalPlan, IssueCategory, MediaType } from '../types'
-import { isAxiosError } from 'axios'
+import { apiError } from '../api/errors'
 
 function AudioTrackBadge({ track }: { track: MediaFile['audio_tracks'][0] }) {
   const langColors: Record<string, string> = {
@@ -33,7 +33,7 @@ export default function FilesPage() {
   const page = positiveInt(params.get('page')) ?? 1
   const search = params.get('search') ?? ''
   const hasIssues = params.get('has_issues') === 'true' ? true : params.get('has_issues') === 'false' ? false : undefined
-  const categories: IssueCategory[] = ['missing_required_audio', 'preferred_not_default', 'missing_english', 'missing_japanese', 'missing_dual_audio', 'unknown_language']
+  const categories: IssueCategory[] = ['missing_required_audio', 'preferred_not_default', 'missing_english', 'missing_japanese', 'missing_dual_audio', 'unknown_language', 'preferred_codec']
   const issueCategory = categories.includes(params.get('issue_category') as IssueCategory) ? params.get('issue_category') as IssueCategory : undefined
   const mediaType = ['tv', 'movie', 'anime'].includes(params.get('media_type') || '') ? params.get('media_type') as MediaType : undefined
   const fileId = positiveInt(params.get('file_id'))
@@ -50,6 +50,7 @@ export default function FilesPage() {
   const setPage = (value: number | ((previous: number) => number)) => update({ page: String(typeof value === 'function' ? value(page) : value) })
   const setExpandedFile = (id: number | null) => update({ expanded: id === null ? undefined : String(id) })
   const [trackKeepSelections, setTrackKeepSelections] = useState<Record<string, number[]>>({})
+  const [defaultTrackSelections, setDefaultTrackSelections] = useState<Record<string, string>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [isResetting, setIsResetting] = useState(false)
   const queryClient = useQueryClient()
@@ -57,18 +58,18 @@ export default function FilesPage() {
 
   const refreshMedia = () => {
     setTrackKeepSelections({})
+    setDefaultTrackSelections({})
     return refreshLibrary(queryClient)
   }
 
   const showActionError = (error: unknown) => {
-    setActionError(isAxiosError(error) && typeof error.response?.data?.detail === 'string'
-      ? error.response.data.detail : 'The operation failed. Please try again.')
+    setActionError(apiError(error, 'The operation failed. Please try again.'))
     void refreshMedia()
   }
 
   const updateDefaultAudio = useMutation({
-    mutationFn: ({ fileId, language }: { fileId: number; language: string }) =>
-      mediaApi.updateDefaultAudio(fileId, language),
+    mutationFn: ({ file, trackIndex }: { file: MediaFile; trackIndex: number }) =>
+      mediaApi.updateDefaultAudio(file.id, { track_index: trackIndex, expected_last_scanned: file.last_scanned }),
     onSuccess: () => {
       setActionError(null)
       return refreshMedia()
@@ -88,7 +89,10 @@ export default function FilesPage() {
 
   const removeAudioTracks = useMutation({
     mutationFn: ({ file, keepTrackIndices }: { file: MediaFile; keepTrackIndices: number[] }) =>
-      mediaApi.removeAudioTracks(file.id, { keep_track_indices: keepTrackIndices, keep_backup: true, expected_last_scanned: file.last_scanned }),
+      mediaApi.removeAudioTracks(file.id, { keep_track_indices: keepTrackIndices, keep_backup: true, expected_last_scanned: file.last_scanned,
+        ...(removalPlan?.policy_revision ? { expected_policy_revision: removalPlan.policy_revision } : {}),
+        ...(removalPlan?.warnings?.length ? { acknowledge_policy_warnings: true } : {}),
+      }),
     onSuccess: () => {
       setActionError(null)
       return refreshMedia()
@@ -113,9 +117,10 @@ export default function FilesPage() {
   })
 
   const expandedMediaFile = data?.items.find((file) => file.id === expandedFile)
+  const previewKeepIndices = expandedMediaFile ? trackKeepSelections[`${expandedMediaFile.id}:${expandedMediaFile.last_scanned}`] : undefined
   const { data: removalPlan, isFetching: planLoading, error: planError } = useQuery<AudioTrackRemovalPlan>({
-    queryKey: ['trackRemovalPlan', expandedFile, expandedMediaFile?.last_scanned],
-    queryFn: async () => (await mediaApi.getAudioTrackRemovalPlan(expandedFile!)).data,
+    queryKey: ['trackRemovalPlan', expandedFile, expandedMediaFile?.last_scanned, previewKeepIndices],
+    queryFn: async () => (await mediaApi.getAudioTrackRemovalPlan(expandedFile!, previewKeepIndices)).data,
     enabled: !!expandedMediaFile,
   })
 
@@ -210,10 +215,20 @@ export default function FilesPage() {
       .map((track) => `#${track.track_index} ${(track.language || track.language_raw || 'und').toUpperCase()}${track.title ? ` (${track.title})` : ''}`)
       .join(', ')
     const confirmed = window.confirm(
-      `Edit ${file.filename}?\n\nKeep: ${describe(true)}\nRemove: ${describe(false)}\n\nThe original will be preserved as a .bak file. Existing backups will not be overwritten.`
+      `Edit ${file.filename}?\n\nKeep: ${describe(true)}\nRemove: ${describe(false)}${removalPlan?.warnings?.length ? `\n\nNew audio issues to acknowledge:\n${removalPlan.warnings.join('\n')}` : ''}\n\nThe original will be preserved as a .bak file. Existing backups will not be overwritten.`
     )
     if (!confirmed) return
     removeAudioTracks.mutate({ file, keepTrackIndices })
+  }
+
+  const roleLabel = (role?: string) => role === 'commentary' ? 'Commentary' : role === 'audio_description' ? 'Audio description' : 'Main audio'
+  const handleDefaultAudio = (file: MediaFile) => {
+    const selection = defaultTrackSelections[`${file.id}:${file.last_scanned}`]
+    if (selection === undefined || selection === '') return
+    const track = file.audio_tracks.find((track) => track.track_index === Number(selection))
+    if (!track) return
+    if (!window.confirm(`Set track #${track.track_index} as the only default in ${file.filename}?\n${(track.language || track.language_raw || 'UND').toUpperCase()} · ${roleLabel(track.role)}${track.title ? ` · ${track.title}` : ''}`)) return
+    updateDefaultAudio.mutate({ file, trackIndex: track.track_index })
   }
 
   return (
@@ -291,11 +306,12 @@ export default function FilesPage() {
         >
           <option value="">All Issue Types</option>
           <option value="missing_required_audio">Missing required audio</option>
-          <option value="preferred_not_default">Preferred audio not default</option>
+          <option value="preferred_not_default">Default audio issues</option>
           <option value="missing_english">No English tag</option>
           <option value="missing_japanese">No Japanese tag</option>
           <option value="missing_dual_audio">Missing dual audio</option>
           <option value="unknown_language">Unknown language</option>
+          <option value="preferred_codec">No preferred audio codec</option>
         </select>
         <select aria-label="Media type" value={mediaType || ''} onChange={(event) => update({ media_type: event.target.value || undefined, page: undefined })}
           className="rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2">
@@ -395,7 +411,9 @@ export default function FilesPage() {
                           {file.issue_details && (
                             <div>
                               <span className="text-sm font-medium text-red-700 dark:text-red-400">Issues:</span>
-                              <p className="text-sm text-red-600 dark:text-red-400">{file.issue_details}</p>
+                              {file.issues?.length ? <ul className="text-sm text-red-600 dark:text-red-400 list-disc pl-5">
+                                {file.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
+                              </ul> : <p className="text-sm text-red-600 dark:text-red-400">{file.issue_details}</p>}
                             </div>
                           )}
                           <div className="flex flex-wrap items-center gap-2">
@@ -411,20 +429,21 @@ export default function FilesPage() {
                               Rescan File
                             </button>
                             <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Set default audio:</span>
-                            {[...new Set(file.audio_tracks.map((track) => (track.language || '').toLowerCase()).filter(Boolean))].map((lang) => (
-                              <button
-                                key={lang}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  updateDefaultAudio.mutate({ fileId: file.id, language: lang })
-                                }}
-                                disabled={updateDefaultAudio.isPending || removeAudioTracks.isPending || !file.edit_capabilities?.set_default_audio}
-                                title={file.edit_capabilities?.default_audio_reason || undefined}
-                                className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
-                              >
-                                {lang.toUpperCase()}
-                              </button>
-                            ))}
+                            <select aria-label={`Default audio track for ${file.filename}`}
+                              value={defaultTrackSelections[`${file.id}:${file.last_scanned}`] ?? ''}
+                              onChange={(event) => setDefaultTrackSelections((previous) => ({ ...previous, [`${file.id}:${file.last_scanned}`]: event.target.value }))}
+                              disabled={updateDefaultAudio.isPending || removeAudioTracks.isPending || !file.edit_capabilities?.set_default_audio}
+                              className="max-w-full px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800">
+                              <option value="">Choose an exact track…</option>
+                              {file.audio_tracks.map((track) => <option key={track.id} value={track.track_index}>
+                                #{track.track_index} {(track.language || track.language_raw || 'UND').toUpperCase()} · {roleLabel(track.role)}{track.title ? ` · ${track.title}` : ''}{track.codec ? ` · ${track.codec}` : ''}{track.channels ? ` · ${track.channels}ch` : ''}
+                              </option>)}
+                            </select>
+                            <button onClick={() => handleDefaultAudio(file)}
+                              disabled={!defaultTrackSelections[`${file.id}:${file.last_scanned}`] || updateDefaultAudio.isPending || removeAudioTracks.isPending || !file.edit_capabilities?.set_default_audio}
+                              className="px-2.5 py-1 text-xs rounded border border-gray-300 dark:border-gray-600 disabled:opacity-50">
+                              Set selected track as default
+                            </button>
                           </div>
                           {file.edit_capabilities?.default_audio_reason && (
                             <p className="text-xs text-gray-500 dark:text-gray-400">{file.edit_capabilities.default_audio_reason}</p>
@@ -433,8 +452,12 @@ export default function FilesPage() {
                             <div>
                               <span className="text-sm font-medium text-amber-800 dark:text-amber-300">Remove audio tracks:</span>
                               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
-                                Select the tracks to keep. The initial selection uses your saved language preferences.
+                                Select the tracks to keep. Suggestions preserve your saved languages and the languages required by this title's audio rules.
                               </p>
+                              {!!removalPlan?.warnings?.length && <div role="alert" className="text-sm text-amber-800 dark:text-amber-300 mt-2">
+                                This selection introduces audio issues:
+                                <ul className="list-disc pl-5">{removalPlan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                              </div>}
                               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1" role="status">
                                 {file.edit_capabilities?.track_removal_reason || (planError ? 'Unable to load saved track preferences. Try reopening this file.' : planLoading ? 'Loading saved track preferences...' : '')}
                               </p>

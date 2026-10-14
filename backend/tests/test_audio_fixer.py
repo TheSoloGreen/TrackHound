@@ -1,6 +1,8 @@
 """Tests for low-level audio default fixer utilities."""
 
 import unittest
+import json
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.core.audio_fixer import (
@@ -27,14 +29,35 @@ class AudioFixerTests(unittest.TestCase):
 
         with (
             patch("app.core.audio_fixer.shutil.which", return_value="/usr/bin/mkvpropedit"),
-            patch("app.core.audio_fixer.subprocess.run") as run_mock,
+            patch("app.core.audio_fixer.subprocess.run", side_effect=[
+                SimpleNamespace(stdout=json.dumps({'tracks': [{'id': 0, 'type': 'audio'}, {'id': 1, 'type': 'audio'}]})),
+                SimpleNamespace(stdout=''),
+                SimpleNamespace(stdout=json.dumps({'tracks': [{'type': 'audio', 'properties': {'default_track': False}},
+                                                            {'type': 'audio', 'properties': {'default_track': True}}]})),
+            ]) as run_mock,
         ):
             ok = set_default_track_by_index("/media/movie/file.mkv", tracks, 1)
 
         self.assertTrue(ok)
-        command = run_mock.call_args.args[0]
+        command = run_mock.call_args_list[1].args[0]
         self.assertIn("track:a1", command)
         self.assertIn("track:a2", command)
+
+    def test_native_success_with_wrong_flags_is_not_reported_as_success(self):
+        probe = SimpleNamespace(stdout=json.dumps({'tracks': [
+            {'id': 0, 'type': 'audio', 'properties': {'default_track': True}},
+            {'id': 1, 'type': 'audio', 'properties': {'default_track': True}},
+        ]}))
+        with patch('app.core.audio_fixer.shutil.which', return_value='/tool'), \
+             patch('app.core.audio_fixer.subprocess.run', side_effect=[probe, SimpleNamespace(stdout=''), probe]):
+            self.assertFalse(set_default_track_by_index('/media/fixture.mkv', [{'index': 0}, {'index': 1}], 1))
+
+    def test_native_track_count_mismatch_never_starts_edit(self):
+        probe = SimpleNamespace(stdout=json.dumps({'tracks': [{'id': 0, 'type': 'audio'}]}))
+        with patch('app.core.audio_fixer.shutil.which', return_value='/tool'), \
+             patch('app.core.audio_fixer.subprocess.run', return_value=probe) as native:
+            self.assertFalse(set_default_track_by_index('/media/fixture.mkv', [{'index': 0}, {'index': 1}], 1))
+            self.assertEqual(native.call_count, 1)
 
 
 if __name__ == "__main__":

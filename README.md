@@ -78,7 +78,7 @@ accounts. Local scanning works without a Plex connection.
 ### Confirming a container update
 
 The footer on every page, including Login, displays the running server's version
-and build revision, for example `TrackHound v0.2.0 · abc123def456`. Hover over the
+and build revision, for example `TrackHound v0.3.0 · abc123def456`. Hover over the
 label for the full revision. `/api/info` returns the same values without caching;
 `/api/health` also includes them. Published images embed the Git commit of the
 merged build, so successive builds are distinguishable even within one release.

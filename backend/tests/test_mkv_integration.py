@@ -8,6 +8,7 @@ import pytest
 
 from app.core.analyzer import AudioAnalyzer, require_successful_analysis
 from app.core.audio_fixer import remove_unwanted_audio_tracks, set_default_track_by_language
+from app.core.preference_engine import PreferenceEngine
 
 
 @pytest.mark.skipif(any(shutil.which(tool) is None for tool in ("ffmpeg", "mkvmerge", "mkvpropedit")), reason="requires ffmpeg and MKVToolNix")
@@ -37,3 +38,24 @@ def test_real_mkv_edit_retains_video_subtitles_and_original_backup(tmp_path):
     probe = json.loads(subprocess.run(["mkvmerge", "-J", str(source)], check=True, capture_output=True, text=True, timeout=30).stdout)
     assert [track["type"] for track in probe["tracks"]] == ["video", "audio", "subtitles"]
     assert [track["language"] for track in analyzer.analyze(str(source))["audio_tracks"]] == ["en"]
+
+
+@pytest.mark.skipif(any(shutil.which(tool) is None for tool in ("ffmpeg", "mkvmerge", "mkvpropedit")), reason="requires ffmpeg and MKVToolNix")
+def test_real_default_edit_avoids_commentary_and_resolves_multiple_flags(tmp_path):
+    source = tmp_path / "commentary.mkv"
+    subprocess.run([
+        "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
+        "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono", "-map", "0:a", "-map", "1:a",
+        "-t", "0.2", "-c:a", "pcm_s16le", "-metadata:s:a:0", "language=eng",
+        "-metadata:s:a:1", "language=eng", "-metadata:s:a:0", "title=Director Commentary",
+        "-metadata:s:a:1", "title=Main audio", str(source),
+    ], check=True, capture_output=True, timeout=30)
+    subprocess.run(["mkvpropedit", str(source), "--edit", "track:a1", "--set", "flag-default=1",
+                    "--edit", "track:a2", "--set", "flag-default=1"], check=True, capture_output=True, timeout=30)
+    analyzer = AudioAnalyzer()
+    tracks = require_successful_analysis(analyzer.analyze(str(source)))["audio_tracks"]
+    assert "MULTIPLE_DEFAULTS" in {issue.code for issue in PreferenceEngine().evaluate_detailed(tracks)}
+    assert set_default_track_by_language(str(source), tracks, "en")
+    updated = require_successful_analysis(analyzer.analyze(str(source)))["audio_tracks"]
+    assert [track["index"] for track in updated if track["is_default"]] == [1]
+    assert not PreferenceEngine().evaluate(updated)

@@ -162,7 +162,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
                 Check default audio track
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag if default track isn't the preferred language
+                Flag missing or multiple defaults, commentary defaults, and the wrong preferred language.
               </p>
             </div>
           </label>
@@ -200,7 +200,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
                 Default audio tracks to keep when removing tracks
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Used by the removal tool when you do not manually override track selection. UND stays enabled by default because it can be mislabeled English.
+                Removal suggestions also preserve the languages required by this title's audio rules. Unknown language tracks stay selected for review when UND is enabled.
               </p>
             </div>
             <div className="flex flex-wrap gap-4">
