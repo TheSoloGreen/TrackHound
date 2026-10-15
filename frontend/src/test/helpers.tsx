@@ -19,7 +19,7 @@ export const settings: UserSettings = {
   audio_preferences: { require_english_non_anime: true, require_japanese_anime: true,
     require_dual_audio_anime: true, check_default_track: true, preferred_codecs: [],
     auto_fix_english_default_non_anime: false, audio_track_keep_languages: ['ja', 'und'] },
-  anime_detection: { use_plex_genres: true, anime_folder_keywords: ['anime'] },
+  anime_detection: { use_plex_genres: true, anime_genres: ['anime', 'アニメ'], anime_folder_keywords: ['anime'] },
   file_extensions: ['.mkv'],
 }
 export const runningScan: ScanStatus = {

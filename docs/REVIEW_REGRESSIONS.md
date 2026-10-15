@@ -1,5 +1,70 @@
 # Library review regression checks
 
+## 0.3.0 release-candidate verification
+
+Back up the catalog and retain both deployment keys. Migration
+`0008_structured_issues` adds code-based issue records while preserving legacy
+messages. Legacy findings keep their evidence and are marked as legacy until a
+scan or classification update evaluates them using the new rules. A full scan is
+required to apply the new default/main-audio checks to unchanged files.
+
+The default-audio issue category now includes absent and multiple flags, auxiliary
+defaults, and wrong-language defaults. Commentary/audio-description roles use
+explicit track titles; they are hints, not a claim about the spoken content.
+The exact-track selector retains access to every track for a deliberate manual
+choice. Default changes require MKVToolNix inspection as well as editing and are
+verified after the native edit.
+
+Removal suggestions include the languages required by the title's current
+rules, in addition to saved keep languages. Manual overrides use a server-side
+preview, show any newly introduced issues, and bind acknowledgment to the policy
+revision. Refresh a plan after a scan, classification change, or preference
+change. Existing backups are never overwritten.
+
+On a disposable catalog or a copy of the live catalog, first test with media
+writes disabled:
+
+1. Confirm version 0.3.0, startup migration, authentication mode, and artwork.
+2. Scan Western animation and anime fixtures and verify classification reasons.
+3. Review files with no defaults, multiple defaults, commentary-only English,
+   unknown languages, and a nonpreferred codec. Follow the matching dashboard
+   links and compare Files and exported issue codes/counts.
+4. Preview a dual-audio anime removal: Japanese should be kept by default.
+   Uncheck it and verify the warning, cancel once, then review again.
+5. On expendable MKVs only, enable writes and set an exact main track default.
+   Rescan and verify exactly one flagged track. Test stale selections and changed
+   preferences before confirming a remux. Verify the original `.bak` remains.
+6. Restart the container and verify issue records and review notes persist.
+
+Focused safety coverage: `test_audio_policy.py`, `test_audio_fixer.py`, the real
+native-tool tests in `test_mkv_integration.py`, migration upgrades on both engines,
+and frontend `MediaActions.test.tsx`. Preference changes still require a full scan
+for unchanged files; durable jobs and edit recovery are later milestones.
+
+## Anime classification
+
+Plex genre detection now requires an exact match against the configured anime
+genre labels. The defaults are `Anime` and `アニメ`; `Animation` and
+`Japanese Animation` do not classify a title as anime unless explicitly added in
+Settings. An empty genre list disables genre hints. TV and movie enrichment use
+the same mapping.
+
+The default folder keyword is now `anime`. Folder detection matches whole terms,
+including space, hyphen, and underscore separators, so `NotAnime` and a filename
+containing `anime` do not trigger it. Saved custom keywords are preserved. If an
+older installation still has `animation` in its saved keywords, remove it in
+Settings to stop treating those folders as anime.
+
+Run a **Full scan** after adjusting detection settings to refresh unchanged
+titles and their audio issues. Explicit anime locations and manual positive or
+negative overrides retain precedence. The title detail page explains whether
+classification came from a manual choice, scan location, folder keyword, or
+Plex genre. This classification change does not itself edit media.
+
+Focused coverage: `test_anime_classification.py`, saved genre mapping scans and
+manual override cases in `test_scanner_run_scan.py`, and frontend
+`PreferencesForm.test.tsx` and `MediaActions.test.tsx`.
+
 ## Catalog correctness and artwork credentials
 
 Migration `0007_artwork_security` replaces stored Plex poster URLs with thumbnail

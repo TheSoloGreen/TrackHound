@@ -24,7 +24,9 @@ from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import set_default_track_by_index
 from app.models.schemas import AnimeDetectionSettings, normalize_file_extensions
 from app.core.user_settings import load_user_settings
-from app.core.classification import classify_show
+from app.core.classification import anime_folder_match, classify_show
+from app.core.audio_roles import audio_role, select_main_track
+from app.core.issue_catalog import apply_evaluation
 from app.core.scan_state import scan_state_manager
 
 logger = logging.getLogger(__name__)
@@ -113,32 +115,17 @@ class MediaScanner:
     def __init__(self, extensions=None, plex_token=None, audio_preferences=None, anime_detection=None):
         self.extensions = set(normalize_file_extensions(list(extensions))) if extensions is not None else DEFAULT_EXTENSIONS
         self.analyzer = AudioAnalyzer()
-        self.plex_connector = PlexConnector(plex_token) if plex_token else None
+        self.anime_detection = anime_detection or AnimeDetectionSettings()
+        self.plex_connector = PlexConnector(plex_token, anime_genres=self.anime_detection.anime_genres) if plex_token else None
         self.plex_failed = False
         self.preference_engine = PreferenceEngine(audio_preferences)
-        self.anime_detection = anime_detection or AnimeDetectionSettings()
 
     def _get_english_default_fix_index(self, audio_tracks: list[dict]) -> Optional[int]:
         """Return the English track index to promote as default, if needed."""
-        default_track = None
-        english_indices: list[int] = []
-
-        for track in audio_tracks:
-            language = (track.get("language") or "").lower()
-            track_index = track.get("index")
-            if language == "en" and isinstance(track_index, int):
-                english_indices.append(track_index)
-            if track.get("is_default"):
-                default_track = track
-
-        if not english_indices:
+        defaults = [track for track in audio_tracks if track.get("is_default")]
+        if len(defaults) == 1 and defaults[0].get("language") == "en" and audio_role(defaults[0]) == "main":
             return None
-
-        default_language = (default_track.get("language") or "").lower() if default_track else None
-        if default_language == "en":
-            return None
-
-        return english_indices[0]
+        return select_main_track(audio_tracks, "en", self.preference_engine.preferences.preferred_codecs)
 
     def _auto_fix_default_track(self, file_path: str, audio_info: dict, is_anime: bool) -> dict:
         """Try to set the English track as default for non-anime files when enabled."""
@@ -161,7 +148,7 @@ class MediaScanner:
             return self.analyzer.analyze(file_path)
 
         logger.warning("Auto-fix skipped or failed for file: %s", file_path)
-        return audio_info
+        return self.analyzer.analyze(file_path)  # A failed verification may follow a partial native edit.
 
     def discover_files(self, location: str) -> list[str]:
         """Fail the location on unreadable directories instead of returning a partial list."""
@@ -268,7 +255,7 @@ class MediaScanner:
 
         # An anime location forces anime; other locations allow automatic hints.
         # Manual positive and negative overrides win, including before auto-fix.
-        folder_hint = any(keyword in str(Path(file_path).parent).lower() for keyword in self.anime_detection.anime_folder_keywords)
+        folder_hint = anime_folder_match(file_path, self.anime_detection.anime_folder_keywords)
         plex_hint = bool(self.anime_detection.use_plex_genres and metadata and metadata.get("is_anime"))
         is_anime = media_type == "anime" or folder_hint or plex_hint
         source = "location" if media_type == "anime" else "folder" if folder_hint else "plex_genre" if plex_hint else None
@@ -316,9 +303,7 @@ class MediaScanner:
         media_file.duration_ms = audio.get("duration_ms")
         media_file.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
         media_file.last_modified = datetime.fromtimestamp(after.st_mtime)
-        issues = self.preference_engine.evaluate(audio.get("audio_tracks", []), is_anime=is_anime)
-        media_file.has_issues = bool(issues)
-        media_file.issue_details = "; ".join(issues) if issues else None
+        apply_evaluation(media_file, self.preference_engine, audio.get("audio_tracks", []), is_anime)
         await db.flush()
         for track in audio.get("audio_tracks", []):
             db.add(AudioTrack(

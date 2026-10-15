@@ -4,6 +4,7 @@ import csv
 import json
 import io
 from typing import Any
+from app.core.issue_catalog import legacy_issues
 
 
 class Exporter:
@@ -78,6 +79,12 @@ class Exporter:
                     "has_issues": getattr(mf, 'has_issues', False),
                     "issue_details": getattr(mf, 'issue_details', None),
                 }
+                records = getattr(mf, "issue_records", None) or getattr(mf, "issues", [])
+                issues = ([{"code": issue.code, "severity": issue.severity, "message": issue.message, "details": issue.details}
+                           for issue in records] if getattr(mf, "issue_evaluation_version", None) is not None else
+                          [issue.to_dict() for issue in legacy_issues(data["issue_details"], data["has_issues"])])
+                data["issues"] = issues
+                data["issue_codes"] = ", ".join(issue["code"] for issue in issues)
                 
                 # Add audio track info
                 audio_tracks = getattr(mf, 'audio_tracks', [])
@@ -143,7 +150,7 @@ class Exporter:
         columns = [
             "id", "filename", "file_path", "episode_number", "episode_title",
             "file_size_mb", "container", "audio_track_count", "audio_languages",
-            "audio_codecs", "has_issues", "issue_details"
+            "audio_codecs", "has_issues", "issue_details", "issue_codes"
         ]
         return cls.to_csv(data, columns)
 

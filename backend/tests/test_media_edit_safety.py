@@ -86,7 +86,7 @@ async def test_successful_refresh_updates_file_size_and_modified_time(scanned_fi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("languages,indices", [(["ja"], [1]), (["en", "und"], [0, 2]), (["jpn", "eng"], [0, 1])])
+@pytest.mark.parametrize("languages,indices", [(["ja"], [0, 1]), (["en", "und"], [0, 2]), (["jpn", "eng"], [0, 1])])
 async def test_removal_plan_uses_saved_languages(scanned_file, languages, indices):
     import json
     db, user, mf, _ = scanned_file
@@ -168,7 +168,7 @@ async def test_post_edit_analysis_failure_explains_that_media_was_changed(scanne
     monkeypatch.setattr(media_access.shutil, "which", lambda _: "/tool")
     backup = str(source.with_suffix(".mkv.bak"))
     with (
-        patch.object(media, "set_default_track_by_language", return_value=True),
+        patch.object(media, "set_default_track_by_index", return_value=True),
         patch.object(media, "remove_unwanted_audio_tracks", return_value=AudioTrackRemovalResult([0], [1, 2], backup)),
         patch.object(media.AudioAnalyzer, "analyze", return_value={"audio_tracks": [], "error": "probe failed"}),
     ):

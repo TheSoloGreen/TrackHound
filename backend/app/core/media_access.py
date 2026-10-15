@@ -32,6 +32,7 @@ def get_media_edit_capabilities(file_path: str | None = None) -> MediaEditCapabi
         if shutil.which("mkvpropedit") is None:
             default_reason = "The server's default-audio editing tool is unavailable."
         if shutil.which("mkvmerge") is None:
+            default_reason = default_reason or "The server's default-audio verification tool is unavailable."
             removal_reason = "The server's audio-track removal tool is unavailable."
         elif not parent_writable:
             removal_reason = "The media directory is read-only or inaccessible."

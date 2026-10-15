@@ -13,6 +13,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
   const queryClient = useQueryClient()
   const [settings, setSettings] = useState(initialSettings)
   const [keywords, setKeywords] = useState(initialSettings.anime_detection.anime_folder_keywords.join(', '))
+  const [genres, setGenres] = useState(initialSettings.anime_detection.anime_genres.join(', '))
   const [extensions, setExtensions] = useState(initialSettings.file_extensions.join(', '))
   const revision = useRef(0)
   const inFlight = useRef(false)
@@ -35,6 +36,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
       if (revision.current === submission.revision) {
         setSettings(response)
         setKeywords(response.anime_detection.anime_folder_keywords.join(', '))
+        setGenres(response.anime_detection.anime_genres.join(', '))
         setExtensions(response.file_extensions.join(', '))
       }
       return queryClient.invalidateQueries({ queryKey: ['trackRemovalPlan'] })
@@ -48,7 +50,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
     inFlight.current = true
     save.mutate({ revision: revision.current, settings: {
       ...settings,
-      anime_detection: { ...settings.anime_detection, anime_folder_keywords: splitList(keywords) },
+      anime_detection: { ...settings.anime_detection, anime_folder_keywords: splitList(keywords), anime_genres: splitList(genres) },
       file_extensions: splitList(extensions),
     } })
   }
@@ -160,7 +162,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
                 Check default audio track
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Flag if default track isn't the preferred language
+                Flag missing or multiple defaults, commentary defaults, and the wrong preferred language.
               </p>
             </div>
           </label>
@@ -198,7 +200,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
                 Default audio tracks to keep when removing tracks
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Used by the removal tool when you do not manually override track selection. UND stays enabled by default because it can be mislabeled English.
+                Removal suggestions also preserve the languages required by this title's audio rules. Unknown language tracks stay selected for review when UND is enabled.
               </p>
             </div>
             <div className="flex flex-wrap gap-4">
@@ -267,24 +269,42 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
                 Use Plex genres
               </span>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                Auto-detect anime from Plex genre tags
+                Match only the Plex genre labels listed below. Animation alone does not mean anime.
               </p>
             </div>
           </label>
+
+          <div>
+            <label htmlFor="anime-genres" className="block font-medium text-gray-900 dark:text-white mb-2">
+              Plex genres indicating anime
+            </label>
+            <p id="anime-genres-help" className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+              Exact genre labels, separated by commas. Defaults are Anime and アニメ. Leave blank to disable genre detection.
+            </p>
+            <input
+              type="text"
+              id="anime-genres"
+              aria-describedby="anime-genres-help"
+              value={genres}
+              onChange={(e) => { revision.current++; setGenres(e.target.value) }}
+              placeholder="Anime, アニメ"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          </div>
 
           <div>
             <label htmlFor="anime-keywords" className="block font-medium text-gray-900 dark:text-white mb-2">
               Anime folder keywords
             </label>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-              Paths containing these words will be marked as anime. Leave blank to disable folder detection.
+              Match whole terms in folder names, including terms separated by spaces, hyphens, or underscores. Leave blank to disable folder detection.
             </p>
             <input
               type="text"
               id="anime-keywords"
               value={keywords}
               onChange={(e) => { revision.current++; setKeywords(e.target.value) }}
-              placeholder="anime, animation"
+              placeholder="anime"
               className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             />
           </div>

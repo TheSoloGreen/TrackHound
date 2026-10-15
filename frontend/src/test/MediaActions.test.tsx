@@ -29,6 +29,7 @@ it.each(['tv', 'movie'] as const)('marks and unmarks %s consistently and refresh
   </Routes></MemoryRouter>, client)
   await user.click(await screen.findByRole('button', { name: 'Mark as Anime' }))
   expect(await screen.findByText('Anime', { selector: 'span' })).toBeVisible()
+  expect(screen.getByLabelText('Classification reason')).toHaveTextContent('Marked as anime manually.')
   expect(screen.getByText('• 1 issue')).toBeVisible()
   keys.forEach((key) => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
   if (base === 'movie') {
@@ -38,6 +39,7 @@ it.each(['tv', 'movie'] as const)('marks and unmarks %s consistently and refresh
   await waitFor(() => expect(screen.getByRole('button', { name: 'Unmark as Anime' })).toBeEnabled())
   await user.click(screen.getByRole('button', { name: 'Unmark as Anime' }))
   expect(await screen.findByText(base === 'movie' ? 'Movie' : 'TV Show', { selector: 'span' })).toBeVisible()
+  expect(screen.getByLabelText('Classification reason')).toHaveTextContent('Marked as non-anime manually.')
   expect(screen.queryByText('• 1 issue')).not.toBeInTheDocument()
   expect(update).toHaveBeenCalledTimes(2)
 })
@@ -71,6 +73,42 @@ it('uses the saved removal plan and sends an explicit manual override with an ex
   }))
   await waitFor(() => expect(client.getQueryState(['stats'])?.isInvalidated).toBe(true))
   keys.forEach((key) => expect(client.getQueryState(key)?.isInvalidated).toBe(true))
+})
+
+it('selects an exact English track and confirms its role before changing defaults', async () => {
+  const user = userEvent.setup()
+  const file = { ...mediaFile, audio_tracks: [
+    { ...mediaFile.audio_tracks[0], title: 'Director Commentary', role: 'commentary' as const },
+    { ...mediaFile.audio_tracks[1], language: 'en', title: 'Main surround', role: 'main' as const },
+  ] }
+  vi.spyOn(mediaApi, 'getFiles').mockResolvedValue({ data: { items: [file], total: 1, pages: 1 } } as never)
+  vi.spyOn(mediaApi, 'getAudioTrackRemovalPlan').mockResolvedValue({ data: { file_id: 1, last_scanned: file.last_scanned, keep_track_indices: [1, 2] } } as never)
+  const edit = vi.spyOn(mediaApi, 'updateDefaultAudio').mockResolvedValue({ data: {} } as never)
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  renderWithClient(<MemoryRouter initialEntries={['/files?expanded=1']}><FilesPage /></MemoryRouter>)
+  await user.selectOptions(await screen.findByRole('combobox', { name: 'Default audio track for movie.mkv' }), '2')
+  await user.click(screen.getByRole('button', { name: 'Set selected track as default' }))
+  expect(confirm.mock.calls[0][0]).toContain('track #2')
+  expect(confirm.mock.calls[0][0]).toContain('Main surround')
+  await waitFor(() => expect(edit).toHaveBeenCalledWith(1, { track_index: 2, expected_last_scanned: file.last_scanned }))
+})
+
+it('shows removal policy warnings, allows cancellation, and binds acknowledgment to the reviewed policy', async () => {
+  const user = userEvent.setup()
+  vi.spyOn(mediaApi, 'getFiles').mockResolvedValue({ data: { items: [mediaFile], total: 1, pages: 1 } } as never)
+  vi.spyOn(mediaApi, 'getAudioTrackRemovalPlan').mockResolvedValue({ data: { file_id: 1, last_scanned: mediaFile.last_scanned,
+    keep_track_indices: [1], warnings: ['Missing Japanese audio track (anime)'], policy_revision: 'reviewed-policy' } } as never)
+  const remove = vi.spyOn(mediaApi, 'removeAudioTracks').mockResolvedValue({ data: {} } as never)
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+  renderWithClient(<MemoryRouter initialEntries={['/files?expanded=1']}><FilesPage /></MemoryRouter>)
+  expect(await screen.findByRole('alert')).toHaveTextContent('Missing Japanese')
+  await user.click(screen.getByRole('button', { name: 'Remove Unchecked Tracks' }))
+  expect(remove).not.toHaveBeenCalled()
+  expect(confirm.mock.calls[0][0]).toContain('New audio issues to acknowledge')
+  await user.click(screen.getByRole('button', { name: 'Remove Unchecked Tracks' }))
+  await waitFor(() => expect(remove).toHaveBeenCalledWith(1, expect.objectContaining({
+    acknowledge_policy_warnings: true, expected_policy_revision: 'reviewed-policy',
+  })))
 })
 
 it('refreshes detail and location counts after a library reset', async () => {

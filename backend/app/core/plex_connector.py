@@ -55,16 +55,20 @@ class PlexEpisode:
 class PlexConnector:
     """Connector for Plex Media Server API."""
 
-    def __init__(self, token: Optional[str] = None, server_url: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, server_url: Optional[str] = None, *, anime_genres: Optional[list[str]] = None):
         """
         Initialize Plex connector.
         
         Args:
             token: Plex authentication token
             server_url: Plex server URL (if None, will auto-discover)
+            anime_genres: Exact genre labels that indicate anime; an empty list disables genre hints
         """
         self.token = token
         self.server_url = server_url
+        self.anime_genres = {genre.strip().casefold() for genre in
+                             (anime_genres if anime_genres is not None else ["anime", "アニメ"])
+                             if genre.strip()}
         self._server = None
         self._connection_lock = Lock()
         self._library_loaded = False
@@ -325,10 +329,8 @@ class PlexConnector:
         return shows
 
     def _is_anime(self, genres: list[str]) -> bool:
-        """Check if genres indicate anime."""
-        anime_genres = {"anime", "animation", "アニメ"}
-        genre_lower = {g.lower() for g in genres}
-        return bool(anime_genres & genre_lower)
+        """Only explicit, configured genre labels indicate anime."""
+        return bool(self.anime_genres & {genre.strip().casefold() for genre in genres})
 
     def find_show_by_file(self, file_path: str) -> Optional[PlexShow]:
         """

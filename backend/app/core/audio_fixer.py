@@ -11,6 +11,7 @@ import tempfile
 from threading import Lock
 
 from app.core.analyzer import normalize_language
+from app.core.audio_roles import select_main_track
 
 _edit_lock = Lock()
 logger = logging.getLogger(__name__)
@@ -33,14 +34,8 @@ class AudioTrackRemovalResult:
 
 
 def find_track_index_for_language(audio_tracks: list[dict], language: str) -> int | None:
-    """Find the first audio track index matching the requested language."""
-    normalized = (language or "").lower().strip()
-    for track in audio_tracks:
-        track_language = (track.get("language") or "").lower()
-        track_index = track.get("index")
-        if track_language == normalized and isinstance(track_index, int):
-            return track_index
-    return None
+    """Select a suitable main track, avoiding commentary and audio description."""
+    return select_main_track(audio_tracks, language)
 
 
 def set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_index: int) -> bool:
@@ -57,7 +52,7 @@ def _set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_
     if Path(file_path).suffix.lower() != ".mkv":
         return False
 
-    if shutil.which("mkvpropedit") is None:
+    if shutil.which("mkvpropedit") is None or shutil.which("mkvmerge") is None:
         return False
 
     valid_indexes = sorted(
@@ -67,7 +62,12 @@ def _set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_
             if isinstance(track.get("index"), int)
         }
     )
-    if track_index not in valid_indexes:
+    if track_index not in valid_indexes or valid_indexes != list(range(len(valid_indexes))):
+        return False
+    try:
+        if len(_get_mkvmerge_audio_track_ids(file_path)) != len(valid_indexes):
+            return False
+    except AudioTrackRemovalError:
         return False
 
     command = ["mkvpropedit", file_path]
@@ -77,13 +77,17 @@ def _set_default_track_by_index(file_path: str, audio_tracks: list[dict], track_
 
     try:
         subprocess.run(command, check=True, capture_output=True, text=True, timeout=DEFAULT_EDIT_TIMEOUT_SECONDS)
-        return True
-    except (subprocess.SubprocessError, OSError):
+        probe = subprocess.run(["mkvmerge", "-J", file_path], check=True, capture_output=True,
+                               text=True, timeout=PROBE_TIMEOUT_SECONDS)
+        audio = [track for track in json.loads(probe.stdout).get("tracks", []) if track.get("type") == "audio"]
+        return len(audio) == len(valid_indexes) and [index for index, track in enumerate(audio)
+            if track.get("properties", {}).get("default_track")] == [track_index]
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError):
         return False
 
 
 def set_default_track_by_language(file_path: str, audio_tracks: list[dict], language: str) -> bool:
-    """Set the first track matching the language as default for an MKV file."""
+    """Set a suitable main track matching the language as default for an MKV file."""
     target_index = find_track_index_for_language(audio_tracks, language)
     if target_index is None:
         return False
@@ -110,6 +114,8 @@ def _track_language_tokens(track: dict) -> set[str]:
             tokens.add("und")
     elif language is None:
         tokens.add("und")
+    if not normalize_language(language) and not normalize_language(language_raw):
+        tokens.add("und")  # Unrecognized tags also need review before removal.
 
     return tokens
 
@@ -173,7 +179,7 @@ def _get_mkvmerge_audio_track_ids(file_path: str) -> list[int]:
 
     try:
         payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, TypeError) as exc:
         raise AudioTrackRemovalError("mkvmerge returned invalid JSON while inspecting tracks.") from exc
 
     audio_track_ids: list[int] = []

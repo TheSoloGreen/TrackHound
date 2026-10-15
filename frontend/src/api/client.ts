@@ -82,13 +82,15 @@ export const mediaApi = {
   updateLanguageReview: (id: number, note: string) => api.patch(`/api/media/files/${id}/language-review`, { note }),
   resetFiles: () => api.delete('/api/media/files'),
   getFile: (id: number) => api.get(`/api/media/files/${id}`),
-  updateDefaultAudio: (id: number, language: string) =>
-    api.post(`/api/media/files/${id}/default-audio`, { language }),
+  updateDefaultAudio: (id: number, data: { track_index: number; expected_last_scanned: string }) =>
+    api.post(`/api/media/files/${id}/default-audio`, data),
   removeAudioTracks: (
     id: number,
-    data: { keep_track_indices?: number[]; keep_languages?: string[]; keep_backup?: boolean; expected_last_scanned?: string }
+    data: { keep_track_indices?: number[]; keep_languages?: string[]; keep_backup?: boolean; expected_last_scanned?: string; acknowledge_policy_warnings?: boolean; expected_policy_revision?: string }
   ) => api.post(`/api/media/files/${id}/audio-tracks/remove`, data),
-  getAudioTrackRemovalPlan: (id: number) => api.get(`/api/media/files/${id}/audio-tracks/plan`),
+  getAudioTrackRemovalPlan: (id: number, keep_track_indices?: number[]) => api.get(`/api/media/files/${id}/audio-tracks/plan`, {
+    params: keep_track_indices === undefined ? undefined : { keep_track_indices, preview: true }, paramsSerializer: { indexes: null },
+  }),
   rescanFile: (id: number) => api.post(`/api/media/files/${id}/rescan`),
   rescanShow: (id: number) => api.post(`/api/media/shows/${id}/rescan`),
 }

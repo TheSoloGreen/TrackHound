@@ -45,12 +45,15 @@ router = APIRouter()
 from app.core.analyzer import AudioAnalyzer, AudioAnalysisError, require_successful_analysis
 from app.core.media_access import get_media_edit_capabilities
 from app.core.classification import classify_show
+from app.core.audio_roles import audio_role, select_main_track
+from app.core.issue_catalog import apply_evaluation, legacy_issues
+from app.core.audio_policy import policy_revision, removal_warnings
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import (
     AudioTrackRemovalError,
     build_keep_audio_track_indices,
     remove_unwanted_audio_tracks,
-    set_default_track_by_language,
+    set_default_track_by_index,
 )
 from app.models.schemas import AudioPreferences as AudioPreferencesSchema
 
@@ -137,6 +140,7 @@ def _build_audio_track_responses(audio_tracks: list) -> list[AudioTrackResponse]
             is_default=at.is_default,
             is_forced=at.is_forced,
             title=at.title,
+            role=audio_role({"title": at.title}),
         )
         for at in sorted(audio_tracks, key=lambda a: a.track_index)
     ]
@@ -157,6 +161,10 @@ def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
         has_issues=mf.has_issues,
         issue_details=mf.issue_details,
         language_review_note=mf.language_review_note,
+        issues=[{"code": issue.code, "severity": issue.severity, "message": issue.message, "details": issue.details}
+                for issue in mf.issue_records] if mf.issue_evaluation_version is not None else
+               [issue.to_dict() for issue in legacy_issues(mf.issue_details, mf.has_issues)],
+        issue_evaluation_version=mf.issue_evaluation_version,
         audio_tracks=_build_audio_track_responses(mf.audio_tracks),
         edit_capabilities=get_media_edit_capabilities(mf.file_path),
     )
@@ -271,9 +279,7 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
     audio_preferences = await _load_user_audio_preferences(db, current_user.id)
     preference_engine = PreferenceEngine(audio_preferences)
     is_anime = bool(mf.show and mf.show.is_anime)
-    issues = preference_engine.evaluate(refreshed_tracks, is_anime=is_anime)
-    mf.has_issues = len(issues) > 0
-    mf.issue_details = "; ".join(issues) if issues else None
+    apply_evaluation(mf, preference_engine, refreshed_tracks, is_anime)
 
     await db.flush()
     await db.refresh(mf, attribute_names=["audio_tracks", "show"])
@@ -300,6 +306,13 @@ def _require_editable_current_file(mf: MediaFile, operation: Literal["default", 
         raise HTTPException(status_code=409, detail="The media file is unavailable. Rescan before editing.") from exc
     if stat.st_size != mf.file_size or datetime.fromtimestamp(stat.st_mtime) != mf.last_modified:
         raise HTTPException(status_code=409, detail="The file has changed since its last scan. Rescan before editing.")
+
+
+def _require_current_selection(mf, expected):
+    if expected is not None and expected.tzinfo is not None:
+        expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
+    if expected is None or expected != mf.last_scanned.replace(tzinfo=None):
+        raise HTTPException(status_code=409, detail="The track selection is out of date. Refresh the file and review the tracks again.")
 
 
 @router.get("/stats", response_model=DashboardStats)
@@ -690,9 +703,7 @@ async def update_show(
         files = (await db.scalars(select(MediaFile).options(selectinload(MediaFile.audio_tracks)).where(
             MediaFile.show_id == show.id, MediaFile.user_id == current_user.id))).all()
         for media_file in files:
-            issues = engine.evaluate([_audio_track_to_dict(track) for track in media_file.audio_tracks], is_anime=show.is_anime)
-            media_file.has_issues = bool(issues)
-            media_file.issue_details = "; ".join(issues) if issues else None
+            apply_evaluation(media_file, engine, [_audio_track_to_dict(track) for track in media_file.audio_tracks], show.is_anime)
     await db.flush()
 
     # Counts
@@ -885,15 +896,22 @@ async def update_media_file_default_audio(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
 
     _require_editable_current_file(mf, "default")
-    target_language = request.language.strip().lower()
     track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
     if not track_dicts:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
 
-    if not await asyncio.to_thread(set_default_track_by_language, mf.file_path, track_dicts, target_language):
+    target = request.track_index
+    if target is not None:
+        _require_current_selection(mf, request.expected_last_scanned)
+    else:
+        preferences = await _load_user_audio_preferences(db, current_user.id)
+        target = select_main_track(track_dicts, request.language, preferences.preferred_codecs)
+    if target is None or target not in {track["index"] for track in track_dicts}:
+        raise HTTPException(status_code=400, detail="No suitable main audio track matches. Review and select an exact track.")
+    if not await asyncio.to_thread(set_default_track_by_index, mf.file_path, track_dicts, target):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to set default audio track. Ensure the file is MKV, mkvpropedit is installed, and the language exists.",
+            detail="The default audio change could not be applied or verified. Flags may have changed; rescan the file before editing again.",
         )
 
     try:
@@ -904,8 +922,10 @@ async def update_media_file_default_audio(
             detail=f"Default audio was updated, but its metadata could not be refreshed. Rescan before editing again. {exc.detail}",
         ) from exc
 
+    if [track.track_index for track in mf.audio_tracks if track.is_default] != [target]:
+        raise HTTPException(status_code=409, detail="Default flags changed, but refreshed analysis did not confirm the selected track. Rescan before editing again.")
     return UpdateDefaultAudioResponse(
-        message=f"Default audio updated to '{target_language}'.",
+        message=f"Default audio updated to track #{target}.",
         media_file=_build_media_file_response(mf),
     )
 
@@ -915,21 +935,34 @@ async def plan_media_file_audio_tracks(
     file_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    keep_track_indices: Annotated[Optional[list[int]], Query()] = None,
+    preview: bool = False,
 ):
     result = await db.execute(
-        select(MediaFile).options(selectinload(MediaFile.audio_tracks))
+        select(MediaFile).options(selectinload(MediaFile.audio_tracks), selectinload(MediaFile.show))
         .where(MediaFile.id == file_id, MediaFile.user_id == current_user.id)
     )
     mf = result.scalar_one_or_none()
     if not mf:
         raise HTTPException(status_code=404, detail="Media file not found")
     keep_languages = await _load_user_audio_track_keep_languages(db, current_user.id)
+    engine = PreferenceEngine(await _load_user_audio_preferences(db, current_user.id))
+    is_anime = bool(mf.show and mf.show.is_anime)
+    tracks = [_audio_track_to_dict(track) for track in mf.audio_tracks]
+    required = engine.required_languages(is_anime)
+    if preview and keep_track_indices is None:
+        keep_track_indices = []
+    if keep_track_indices is None:
+        keep_track_indices = build_keep_audio_track_indices(tracks, list(set(keep_languages) | required))
+    elif set(keep_track_indices) - {track["index"] for track in tracks}:
+        raise HTTPException(status_code=400, detail="The selection contains unknown audio tracks. Refresh the file.")
     return AudioTrackRemovalPlan(
         file_id=mf.id,
         last_scanned=mf.last_scanned,
-        keep_track_indices=build_keep_audio_track_indices(
-            [_audio_track_to_dict(track) for track in mf.audio_tracks], keep_languages
-        ),
+        keep_track_indices=sorted(set(keep_track_indices)),
+        required_languages=sorted(required),
+        warnings=removal_warnings(engine, tracks, keep_track_indices, is_anime),
+        policy_revision=policy_revision(engine, keep_languages, is_anime),
     )
 
 
@@ -963,20 +996,31 @@ async def remove_media_file_audio_tracks(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
 
     keep_track_indices = request.keep_track_indices
+    engine = PreferenceEngine(await _load_user_audio_preferences(db, current_user.id))
+    is_anime = bool(mf.show and mf.show.is_anime)
+    saved_keep_languages = await _load_user_audio_track_keep_languages(db, current_user.id)
+    revision = policy_revision(engine, saved_keep_languages, is_anime)
+    if request.expected_policy_revision is not None and request.expected_policy_revision != revision:
+        raise HTTPException(status_code=409, detail="Audio preferences changed. Refresh the removal plan and review it again.")
     if keep_track_indices is not None:
-        expected = request.expected_last_scanned
-        if expected is not None and expected.tzinfo is not None:
-            expected = expected.astimezone(timezone.utc).replace(tzinfo=None)
-        if expected is None or expected.replace(tzinfo=None) != mf.last_scanned.replace(tzinfo=None):
-            raise HTTPException(status_code=409, detail="The track selection is out of date. Refresh the file and review the tracks again.")
+        _require_current_selection(mf, request.expected_last_scanned)
     if keep_track_indices is None:
         keep_languages = request.keep_languages
         if keep_languages is None:
-            keep_languages = await _load_user_audio_track_keep_languages(db, current_user.id)
+            keep_languages = list(set(saved_keep_languages) | engine.required_languages(is_anime))
         keep_track_indices = build_keep_audio_track_indices(
             track_dicts,
             keep_languages=keep_languages,
         )
+
+    if set(keep_track_indices) - {track["index"] for track in track_dicts}:
+        raise HTTPException(status_code=400, detail="Requested audio track indexes do not exist. Refresh the file.")
+    warnings = removal_warnings(engine, track_dicts, keep_track_indices, is_anime)
+    if warnings and (not request.acknowledge_policy_warnings or request.expected_policy_revision != revision):
+        raise HTTPException(status_code=409, detail={
+            "message": "This selection introduces audio policy issues. Review the removal plan and acknowledge its warnings.",
+            "warnings": warnings,
+        })
 
     try:
         removal_result = await asyncio.to_thread(

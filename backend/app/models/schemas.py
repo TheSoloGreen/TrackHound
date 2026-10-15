@@ -201,6 +201,7 @@ class AudioTrackResponse(BaseModel):
     is_default: bool
     is_forced: bool
     title: Optional[str] = None
+    role: Literal["main", "commentary", "audio_description"] = "main"
 
 
 # ============== Media File Schemas ==============
@@ -213,6 +214,13 @@ class MediaEditCapabilities(BaseModel):
     remove_audio_tracks: bool
     default_audio_reason: Optional[str] = None
     track_removal_reason: Optional[str] = None
+
+
+class IssueResponse(BaseModel):
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    details: dict = Field(default_factory=dict)
 
 
 class MediaFileResponse(BaseModel):
@@ -231,6 +239,8 @@ class MediaFileResponse(BaseModel):
     last_scanned: datetime
     has_issues: bool
     issue_details: Optional[str] = None
+    issues: list[IssueResponse] = Field(default_factory=list)
+    issue_evaluation_version: Optional[int] = None
     language_review_note: Optional[str] = None
     audio_tracks: list[AudioTrackResponse] = []
     edit_capabilities: Optional[MediaEditCapabilities] = None
@@ -340,12 +350,13 @@ class AnimeDetectionSettings(BaseModel):
     """Anime detection configuration."""
 
     use_plex_genres: bool = True
-    anime_folder_keywords: list[str] = ["anime", "animation"]
+    anime_genres: list[str] = ["anime", "アニメ"]
+    anime_folder_keywords: list[str] = ["anime"]
 
-    @field_validator("anime_folder_keywords")
+    @field_validator("anime_folder_keywords", "anime_genres")
     @classmethod
     def normalize_keywords(cls, keywords):
-        return list(dict.fromkeys(keyword.strip().lower() for keyword in keywords if keyword.strip()))
+        return list(dict.fromkeys(keyword.strip().casefold() for keyword in keywords if keyword.strip()))
 
 
 def normalize_file_extensions(extensions):
@@ -386,7 +397,7 @@ class UserSettingsUpdate(BaseModel):
         return normalize_file_extensions(extensions) if extensions is not None else None
 
 
-IssueCategory = Literal["missing_required_audio", "preferred_not_default", "missing_english", "missing_japanese", "missing_dual_audio", "unknown_language"]
+IssueCategory = Literal["missing_required_audio", "preferred_not_default", "missing_english", "missing_japanese", "missing_dual_audio", "unknown_language", "preferred_codec"]
 
 
 class LanguageReviewRequest(BaseModel):
@@ -394,9 +405,17 @@ class LanguageReviewRequest(BaseModel):
 
 
 class UpdateDefaultAudioRequest(BaseModel):
-    """Request to set a media file default audio track by language."""
+    """Select an exact reviewed track, or a suitable main track by language."""
 
-    language: str = Field(min_length=2, max_length=10)
+    language: Optional[str] = Field(default=None, min_length=2, max_length=10)
+    track_index: Optional[int] = Field(default=None, ge=0)
+    expected_last_scanned: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def one_selection(self):
+        if (self.language is None) == (self.track_index is None):
+            raise ValueError("Select either a language or an exact track index")
+        return self
 
 
 class UpdateDefaultAudioResponse(BaseModel):
@@ -413,6 +432,8 @@ class AudioTrackRemovalRequest(BaseModel):
     keep_languages: Optional[list[str]] = None
     keep_backup: bool = True
     expected_last_scanned: Optional[datetime] = None
+    acknowledge_policy_warnings: bool = False
+    expected_policy_revision: Optional[str] = None
 
 
 class AudioTrackRemovalPlan(BaseModel):
@@ -421,6 +442,9 @@ class AudioTrackRemovalPlan(BaseModel):
     file_id: int
     last_scanned: datetime
     keep_track_indices: list[int]
+    required_languages: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    policy_revision: str
 
 
 class AudioTrackRemovalResponse(BaseModel):

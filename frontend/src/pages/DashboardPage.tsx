@@ -106,7 +106,7 @@ export default function DashboardPage() {
   const isScanning = scanStatus?.is_running
   const issueRows = [
     ['No English tag', 'missing_english'], ['No Japanese tag', 'missing_japanese'],
-    ['Missing dual audio', 'missing_dual_audio'], ['Preferred audio not default', 'preferred_not_default'],
+    ['Missing dual audio', 'missing_dual_audio'], ['Default audio issues', 'preferred_not_default'],
   ] as const
   const issueCount = (category: string, type?: string) => {
     const key = `${category}_${type ? type + '_' : ''}count` as keyof DashboardStats

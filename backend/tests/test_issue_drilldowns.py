@@ -9,13 +9,15 @@ from sqlalchemy import select
 from app.api import media
 from app.core.preference_engine import PreferenceEngine
 from app.core.analyzer import normalize_language
-from app.models.entities import MediaFile, AudioTrack, Show
+from app.models.entities import MediaFile, AudioTrack, Show, MediaIssue
+from app.core.issue_catalog import legacy_issues
 from app.models.schemas import LanguageReviewRequest
 from test_scanner_run_scan import library, write_media, run, files
 
 
 @pytest.mark.asyncio
-async def test_each_dashboard_cell_matches_list_and_export_with_ownership(library):
+@pytest.mark.parametrize("structured", [False, True])
+async def test_each_dashboard_cell_matches_list_and_export_with_ownership(library, structured):
     async with library.sessions() as db:
         for kind in ('movie', 'tv', 'anime'):
             show = Show(user_id=library.user.id, title=kind, media_type=kind, is_anime=kind == 'anime')
@@ -25,9 +27,14 @@ async def test_each_dashboard_cell_matches_list_and_export_with_ownership(librar
                 'Missing English audio track', 'No track tagged Japanese; audio language needs review for dual audio (anime)',
                 "Default audio track is 'de', expected English", 'No audio tracks found',
             ]):
-                db.add(MediaFile(user_id=library.user.id, show_id=show.id, filename=f'{kind}-{index}.mkv',
+                record = MediaFile(user_id=library.user.id, show_id=show.id, filename=f'{kind}-{index}.mkv',
                     file_path=f'/media/{kind}-{index}.mkv', file_size=1, last_modified=datetime.now(),
-                    has_issues=True, issue_details=message))
+                    has_issues=True, issue_details=message)
+                if structured:
+                    record.issue_evaluation_version = 0
+                    record.issue_records = [MediaIssue(**issue.to_dict()) for issue in legacy_issues(message)]
+                    record.issue_details = 'Reworded legacy finding'
+                db.add(record)
         await db.commit()
         stats = await media.get_dashboard_stats(library.user, db)
         for category in ('missing_english', 'missing_japanese', 'missing_dual_audio', 'preferred_not_default'):
@@ -55,7 +62,7 @@ def test_unknown_tags_are_reviewable_without_asserting_content(tag):
 def test_known_and_mixed_languages_remain_conservative():
     engine = PreferenceEngine()
     assert 'Missing English audio track' in engine.evaluate([{'language': 'de'}])
-    assert engine.evaluate([{'language': 'en'}, {'language': None}]) == ['Unknown or unrecognized audio language metadata']
+    assert engine.evaluate([{'language': 'en', 'is_default': True}, {'language': None}]) == ['Unknown or unrecognized audio language metadata']
     assert normalize_language('eng') == 'en' and normalize_language('jpn') == 'ja'
 
 

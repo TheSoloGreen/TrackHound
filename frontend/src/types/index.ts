@@ -12,7 +12,7 @@ export interface User {
   last_login: string
 }
 
-export type IssueCategory = 'missing_required_audio' | 'preferred_not_default' | 'missing_english' | 'missing_japanese' | 'missing_dual_audio' | 'unknown_language'
+export type IssueCategory = 'missing_required_audio' | 'preferred_not_default' | 'missing_english' | 'missing_japanese' | 'missing_dual_audio' | 'unknown_language' | 'preferred_codec'
 export interface FileFilters { page?: number; page_size?: number; has_issues?: boolean; show_id?: number; search?: string; issue_category?: IssueCategory; media_type?: MediaType; file_id?: number }
 
 // Media type union
@@ -69,6 +69,7 @@ export interface AudioTrack {
   is_default: boolean
   is_forced: boolean
   title: string | null
+  role?: 'main' | 'commentary' | 'audio_description'
 }
 
 // Media types
@@ -83,6 +84,9 @@ export interface AudioTrackRemovalPlan {
   file_id: number
   last_scanned: string
   keep_track_indices: number[]
+  required_languages?: string[]
+  warnings?: string[]
+  policy_revision?: string
 }
 
 export interface MediaFile {
@@ -97,6 +101,8 @@ export interface MediaFile {
   last_scanned: string
   has_issues: boolean
   issue_details: string | null
+  issues?: { code: string; severity: 'error' | 'warning'; message: string; details: Record<string, unknown> }[]
+  issue_evaluation_version?: number | null
   language_review_note?: string | null
   audio_tracks: AudioTrack[]
   edit_capabilities?: MediaEditCapabilities
@@ -147,6 +153,7 @@ export interface AudioPreferences {
 
 export interface AnimeDetectionSettings {
   use_plex_genres: boolean
+  anime_genres: string[]
   anime_folder_keywords: string[]
 }
 
