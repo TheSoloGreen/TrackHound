@@ -95,14 +95,28 @@ class JobManager:
         # Do not abandon a native write in a thread. Its own execution deadline applies.
         if self.execution and self.execution.kind not in EDITS:
             self.execution.cancelled.set()
+        interrupted = False
         try:
             if self.task:
+                # A lifespan cancellation must not propagate into a worker
+                # awaiting a native write in a thread or release its lifetime
+                # lock while that write is still running. A hard process kill
+                # is handled separately by persisted interrupted-job recovery.
+                while not self.task.done():
+                    try:
+                        await asyncio.shield(self.task)
+                    except asyncio.CancelledError:
+                        if self.task.cancelled():
+                            raise
+                        interrupted = True
                 await self.task
                 self.task = None
         finally:
             if self.worker_lock:
                 await self.worker_lock.release()
                 self.worker_lock = None
+        if interrupted:
+            raise asyncio.CancelledError
 
     async def claim(self):
         async with self.coordination, async_session_maker() as db:
@@ -175,7 +189,8 @@ class JobManager:
                 await asyncio.sleep(2)
 
     async def prune_history(self, db, user_id):
-        old = select(Job.id).where(Job.user_id == user_id, ~Job.status.in_(ACTIVE)).order_by(Job.id.desc()).offset(HISTORY_LIMIT)
+        old = select(Job.id).where(Job.user_id == user_id, ~Job.status.in_(ACTIVE)).order_by(
+            Job.finished_at.desc().nulls_last(), Job.id.desc()).offset(HISTORY_LIMIT)
         await db.execute(delete(Job).where(Job.id.in_(old)))
 
     async def execute_scan(self, user_id, payload):
@@ -285,8 +300,10 @@ def scan_status(job):
     if job.status in ACTIVE:
         progress["outcome"] = "running"
     if job.status in ("interrupted", "failed"):
-        progress.update(outcome="failed", errors=[*progress.get("errors", []), job.error or "Job failed"][:50],
-                        error_count=progress.get("error_count", 0) + 1)
+        errors = progress.get("errors", [])
+        extra = [job.error] if job.error else [] if errors else ["Job failed"]
+        progress.update(outcome="failed", errors=[*errors, *extra][:50],
+                        error_count=progress.get("error_count", 0) + len(extra))
     elif job.status == "queued":
         progress.update(outcome="running", current_file="Queued…")
     elif job.status == "cancelled":

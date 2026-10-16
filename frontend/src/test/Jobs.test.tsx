@@ -48,6 +48,15 @@ it('refreshes every library view when a background job finishes', async () => {
   await waitFor(() => keys.forEach((key) => expect(client.getQueryState(key)?.isInvalidated).toBe(true)))
 })
 
+it('refreshes on completion even when active jobs fill the first page', async () => {
+  const client = makeClient()
+  client.setQueryData(['stats'], { before: true })
+  vi.spyOn(jobsApi, 'list').mockResolvedValue({ data: { items: [job], total: 101, latest_finished_at: '2026-10-15T18:02:00' } } as never)
+  renderWithClient(<MemoryRouter><JobsPage /></MemoryRouter>, client)
+  await screen.findByRole('button', { name: 'Cancel job #11' })
+  await waitFor(() => expect(client.getQueryState(['stats'])?.isInvalidated).toBe(true))
+})
+
 it('acknowledges a queued file action and links to durable progress instead of claiming completion', async () => {
   vi.spyOn(mediaApi, 'getFiles').mockResolvedValue({ data: { items: [mediaFile], total: 1, pages: 1 } } as never)
   vi.spyOn(mediaApi, 'getAudioTrackRemovalPlan').mockResolvedValue({ data: { file_id: 1, last_scanned: mediaFile.last_scanned, keep_track_indices: [1, 2, 3] } } as never)

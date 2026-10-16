@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
@@ -27,8 +27,12 @@ async def list_jobs(current_user: Annotated[User, Depends(get_current_user)],
                     offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)):
     scope = Job.user_id == current_user.id
     total = await db.scalar(select(func.count(Job.id)).where(scope))
-    jobs = (await db.scalars(select(Job).where(scope).order_by(Job.status.in_(ACTIVE).desc(), Job.id.desc()).offset(offset).limit(limit))).all()
-    return JobListResponse(items=jobs, total=total)
+    latest_finished = await db.scalar(select(func.max(Job.finished_at)).where(scope))
+    jobs = (await db.scalars(select(Job).where(scope).order_by(
+        case((Job.status == "running", 0), (Job.status == "queued", 1), else_=2),
+        case((Job.status.in_(ACTIVE), Job.id), else_=0),
+        Job.finished_at.desc().nulls_last(), Job.id.desc()).offset(offset).limit(limit))).all()
+    return JobListResponse(items=jobs, total=total, latest_finished_at=latest_finished)
 
 
 async def owned_job(db, user_id, job_id):

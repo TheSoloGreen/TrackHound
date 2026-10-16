@@ -177,6 +177,7 @@ class JobResponse(BaseModel):
 class JobListResponse(BaseModel):
     items: list[JobResponse]
     total: int
+    latest_finished_at: Optional[datetime] = None
 
 
 class ScanStatus(BaseModel):

@@ -379,3 +379,55 @@ async def test_queue_admission_during_probe_does_not_poison_rescan_snapshot(queu
         await task
     result = (await queue.client.get(f"/api/jobs/{job_id}")).json()
     assert result["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_history_uses_finish_order_and_lists_running_work_before_newer_queued_work(queue):
+    async with queue.sessions() as db:
+        # An old queued job finishing now must not be evicted by newer job IDs.
+        old = Job(user_id=queue.user.id, kind="rescan_file", payload={"file_id": 999})
+        db.add(old)
+        await db.commit()
+        db.add_all([Job(user_id=queue.user.id, kind="rescan_file", status="completed",
+                       finished_at=datetime(2026, 1, 1), payload={}) for _ in range(200)])
+        await db.commit()
+        await queue.manager.cancel(db, old)
+        assert (await db.get(Job, old.id)).status == "cancelled"
+        assert await db.scalar(select(func.count(Job.id))) == 200
+        first = await queue.manager.enqueue(db, queue.user.id, "rescan_file", {"file_id": 1})
+        second = await queue.manager.enqueue(db, queue.user.id, "rescan_file", {"file_id": 2})
+    assert await queue.manager.claim() == first.id
+    page = (await queue.client.get("/api/jobs", params={"limit": 1})).json()
+    assert page["items"][0]["id"] == first.id
+    assert page["latest_finished_at"]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancellation_does_not_abandon_a_running_write(queue, monkeypatch):
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_write(*_):
+        from app.core.job_context import current_job
+        started.set()
+        await release.wait()
+        assert not current_job.get().cancelled.is_set()
+        return {"message": "Verified edit"}, "completed"
+    monkeypatch.setattr(queue.manager, "execute_media", slow_write)
+    async with queue.sessions() as db:
+        job = await queue.manager.enqueue(db, queue.user.id, "default_audio", {"file_id": 1})
+    await queue.manager.claim()
+    queue.manager.task = asyncio.create_task(queue.manager.execute(job.id))
+    await asyncio.wait_for(started.wait(), 3)
+    stop = asyncio.create_task(queue.manager.stop())
+    try:
+        await asyncio.sleep(0)
+        stop.cancel()
+        await asyncio.sleep(0)
+        assert not stop.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+    async with queue.sessions() as db:
+        assert (await db.get(Job, job.id)).status == "completed"
+    assert queue.manager.task is None
