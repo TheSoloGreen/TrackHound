@@ -35,6 +35,57 @@ already deleted are cleaned up before foreign keys are enforced. Back up first;
 inspect legacy ownership before exposing a restored instance to additional users.
 Future schema changes require new revisions; do not edit applied revisions.
 
+## Durable jobs (0.4.0)
+
+Run exactly one application process/container per catalog. The supplied Docker
+command starts one Uvicorn worker. Do not add `--workers`, set `WEB_CONCURRENCY`
+above one, or scale replicas against the same database. A lifetime SQLite file
+lock or PostgreSQL session advisory lock rejects a second worker before job
+recovery runs. The SQLite `.worker.lock` sidecar is intentionally retained;
+closing/stopping the worker releases its OS lock. Do not delete it while running.
+
+Scan/start and file/title rescan/edit requests return HTTP **202**, not a finished
+media response. Scan/start retains its scan-status response plus `job_id`;
+the media actions return a job. Poll `/api/jobs/{id}` or open **Jobs** for the
+outcome. `/api/scan/status` reads the latest persisted library-scan status.
+`POST /api/jobs/{id}/cancel` cancels queued work immediately, or requests a safe
+stop for a running scan/rescan. A running media edit cannot be cancelled; its
+native command and verification finish before another job starts. Closing the
+browser does not cancel anything. A title rescan commits each successful file
+independently and reports failures without discarding the other files.
+
+The worker runs FIFO across accounts. Each account may have 100 queued/running
+jobs; a repeated job for the same file/title or a second library scan is rejected.
+The latest 200 terminal outcomes per account are retained. This is operational
+job history, not the per-file/new/resolved issue history planned in #78.
+Payloads contain catalog IDs and reviewed options, never saved Plex credentials.
+Plex credentials and current preferences are loaded when work executes; write
+gates, file snapshots, ownership, and reviewed removal policies are checked again.
+Queued selections that have become stale fail for fresh review.
+
+Graceful shutdown stops read-only work cooperatively and waits for a running
+native write. MediaInfo has a 60-second execution deadline and is killed/reaped
+on cancellation. MKV probes/default edits/remuxes retain 30/60/3600-second native
+command deadlines. Filesystem discovery checks cancellation between directories;
+an OS-level blocked network filesystem call cannot be forcibly interrupted.
+Allow adequate container stop time for intentional large remuxes, or wait for the
+Jobs page to become idle before upgrading. A forced stop may interrupt a write.
+
+After restart, queued jobs resume; formerly running jobs are marked
+**interrupted** and are **not** retried automatically. An interrupted scan keeps
+already committed files but does not finish missing-file reconciliation. Rescan
+affected files after an interrupted edit and inspect any `.bak` or temporary
+files before reviewing another edit. Job status does not replace a full edit
+journal or automatic recovery control (#66). Never delete recovery copies to
+clear an error without verifying the original first.
+
+Resetting the catalog or adding/updating/deleting locations returns 409 while
+that account has queued/running jobs. Finish/cancel those jobs first. A reset
+does not erase retained job outcomes or media backups. Back up the catalog and
+keys before upgrading from 0.3.0; migration `0009_durable_jobs` only adds a queue
+table. For rollback, restore the old image and its matching pre-upgrade catalog
+backup rather than starting 0.3.0 against a newer schema.
+
 ## Keys and Plex reconnection
 
 `SECRET_KEY` signs browser sessions. Changing it requires users to sign in again.

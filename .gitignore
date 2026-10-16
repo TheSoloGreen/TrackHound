@@ -42,6 +42,7 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+*.worker.lock
 
 # Logs
 *.log

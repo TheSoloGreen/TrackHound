@@ -10,7 +10,8 @@ export default function ScanSummary({ status }: { status?: ScanStatus }) {
   return (
     <section aria-label="Scan status" className="space-y-3 p-4 border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20 rounded-xl">
       <div role="status" aria-live="polite">
-        <h2 className="font-semibold text-gray-900 dark:text-white">{labels[status.outcome]}</h2>
+        <h2 className="font-semibold text-gray-900 dark:text-white">{status.job_status === 'interrupted' ? 'Scan interrupted by application restart' : status.job_status === 'queued' ? 'Scan queued' : labels[status.outcome]}</h2>
+        {status.cancel_requested && status.is_running && <p>Cancellation requested; stopping safely…</p>}
         <p className="text-sm text-gray-700 dark:text-gray-300">
           {status.files_scanned} / {status.files_total} files processed · {status.files_removed} missing records removed
         </p>

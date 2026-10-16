@@ -1,5 +1,14 @@
 # TrackHound implementation checkpoint
 
+Current work: 0.4.0 durable jobs (#64), building on the merged
+[0.3.0 release PR #90](https://github.com/TheSoloGreen/TrackHound/pull/90).
+See [CHANGELOG.md](../CHANGELOG.md) for current behavior and the
+[review roadmap #88](https://github.com/TheSoloGreen/TrackHound/issues/88) for
+remaining work. The branch-stack notes below are historical, not current merge
+or deployment instructions.
+
+## Historical branch-stack checkpoint
+
 Review baseline: `0ce4fa81fd8adc264fbf5b78457ad097939a91e2` on `master`.
 The implementation is split into dependent review branches. Nothing has been
 merged or deployed, and no production database or media has been changed.

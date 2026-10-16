@@ -40,7 +40,25 @@ export interface DirectoryBrowseResponse {
   directories: DirectoryEntry[]
 }
 
+export interface Job {
+  id: number
+  kind: 'scan' | 'rescan_file' | 'rescan_show' | 'default_audio' | 'remove_audio'
+  target_file_id?: number | null
+  target_show_id?: number | null
+  status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed' | 'interrupted'
+  progress: { files_scanned?: number; files_total?: number; current_file?: string; errors?: string[]; warnings?: string[] }
+  result: { message?: string; file_id?: number; backup_path?: string }
+  error: string | null
+  cancel_requested: boolean
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+}
+
 export interface ScanStatus {
+  job_id?: number
+  job_status?: string
+  cancel_requested?: boolean
   is_running: boolean
   current_location: string | null
   files_scanned: number

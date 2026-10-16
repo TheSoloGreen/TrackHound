@@ -8,6 +8,7 @@ import ShowsPage from './pages/ShowsPage'
 import ShowDetailPage from './pages/ShowDetailPage'
 import FilesPage from './pages/FilesPage'
 import SettingsPage from './pages/SettingsPage'
+import JobsPage from './pages/JobsPage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading, user, authRequired } = useAuth()
@@ -47,6 +48,7 @@ function App() {
                 <Route path="/shows" element={<Navigate to="/library" replace />} />
                 <Route path="/shows/:id" element={<Navigate to="/library" replace />} />
                 <Route path="/files" element={<FilesPage />} />
+                <Route path="/jobs" element={<JobsPage />} />
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>

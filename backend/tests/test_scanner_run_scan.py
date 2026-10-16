@@ -374,15 +374,18 @@ async def test_scan_can_be_cancelled_while_a_native_probe_is_running(library):
 
 
 @pytest.mark.asyncio
-async def test_unreadable_plex_token_still_schedules_a_local_scan(library):
+async def test_unreadable_plex_token_still_schedules_a_local_scan(library, monkeypatch):
+    from app.core import jobs
+    monkeypatch.setattr(jobs, "async_session_maker", library.sessions)
     write_media(library.root)
     background = BackgroundTasks()
     async with library.sessions() as db:
-        with patch.object(scan_api, "decrypt_value", side_effect=ValueError("wrong key")):
-            response = await scan_api.start_scan(ScanStartRequest(), background, library.user, db)
+        response = await scan_api.start_scan(ScanStartRequest(), background, library.user, db)
     assert response.is_running
-    assert background.tasks[0].kwargs["user_plex_token"] is None
-    await background()
+    assert not background.tasks
+    with patch("app.core.encryption.decrypt_value", side_effect=ValueError("wrong key")):
+        job_id = await jobs.job_manager.claim()
+        await jobs.job_manager.execute(job_id)
     assert len(await files(library)) == 1
     result = await scan_state_manager.get_status(library.user.id)
     assert not result.is_running

@@ -51,6 +51,12 @@ export const authApi = {
 }
 
 // Scan API
+export const jobsApi = {
+  list: (offset = 0) => api.get('/api/jobs', { params: { offset, limit: 50 } }),
+  get: (id: number) => api.get(`/api/jobs/${id}`),
+  cancel: (id: number) => api.post(`/api/jobs/${id}/cancel`),
+}
+
 export const scanApi = {
   browse: (path?: string) => api.get('/api/scan/browse', { params: { path } }),
   getLocations: () => api.get('/api/scan/locations'),

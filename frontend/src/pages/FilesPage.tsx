@@ -52,6 +52,7 @@ export default function FilesPage() {
   const [trackKeepSelections, setTrackKeepSelections] = useState<Record<string, number[]>>({})
   const [defaultTrackSelections, setDefaultTrackSelections] = useState<Record<string, string>>({})
   const [actionError, setActionError] = useState<string | null>(null)
+  const [queuedJob, setQueuedJob] = useState<number | null>(null)
   const [isResetting, setIsResetting] = useState(false)
   const queryClient = useQueryClient()
   const debouncedSearch = useDebounce(search, 300)
@@ -70,7 +71,9 @@ export default function FilesPage() {
   const updateDefaultAudio = useMutation({
     mutationFn: ({ file, trackIndex }: { file: MediaFile; trackIndex: number }) =>
       mediaApi.updateDefaultAudio(file.id, { track_index: trackIndex, expected_last_scanned: file.last_scanned }),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      setQueuedJob(response.data.id)
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       setActionError(null)
       return refreshMedia()
     },
@@ -80,7 +83,9 @@ export default function FilesPage() {
 
   const rescanFile = useMutation({
     mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      setQueuedJob(response.data.id)
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       setActionError(null)
       return refreshMedia()
     },
@@ -93,7 +98,9 @@ export default function FilesPage() {
         ...(removalPlan?.policy_revision ? { expected_policy_revision: removalPlan.policy_revision } : {}),
         ...(removalPlan?.warnings?.length ? { acknowledge_policy_warnings: true } : {}),
       }),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      setQueuedJob(response.data.id)
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       setActionError(null)
       return refreshMedia()
     },
@@ -327,6 +334,7 @@ export default function FilesPage() {
         </div>
       )}
 
+      {queuedJob && <p role="status" className="text-sm text-orange-700 dark:text-orange-400">Job #{queuedJob} queued. <Link className="underline" to="/jobs">View progress and results in Jobs</Link>.</p>}
       {actionError && (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
           <p className="text-sm text-red-700 dark:text-red-400">{actionError}</p>

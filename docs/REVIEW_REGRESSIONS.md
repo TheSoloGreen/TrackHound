@@ -139,3 +139,36 @@ tracks, including an unknown tag and descriptive track titles.
 The 2026-09-20 local browser check used a synthetic catalog and the production
 frontend build. At 320/390px the 600px table was contained in its own scroll area;
 at 768px it fit its container. Keyboard expansion and note save/reload worked.
+
+## 0.4.0 durable jobs live test
+
+Back up the catalog and keys, record the current image, and initially keep
+`MEDIA_WRITES_ENABLED=false`. Use disposable media for write/restart tests.
+
+1. Confirm `/api/info` reports 0.4.0 and the expected merged revision. Open Jobs;
+   old catalog records should be unchanged and the new queue initially empty.
+2. Start a scan of one small test location. The request should return promptly,
+   Dashboard should show queued/running status, and Jobs should retain progress.
+   Reload/navigate away/back; work continues. The finished scan summary survives
+   a normal container restart. Existing library review notes remain intact.
+3. Queue a title rescan. Confirm the HTTP response is 202, progress/errors appear
+   in Jobs, and file/title/dashboard caches update when it finishes. Include a
+   missing/unreadable disposable file: other successes must be retained.
+4. Queue/cancel a scan before it starts. Cancel another during probing. Check
+   cancellation reporting and that incomplete scans do not reconcile missing
+   files. Reset/location changes must return a useful conflict until work stops.
+5. In a disposable catalog, force-stop a running read-only scan and restart.
+   It must show interrupted, not restart automatically. Separately verify queued
+   work resumes. Do not force-stop a production remux to exercise this check.
+6. On copied MKVs only, explicitly enable writes. Queue an exact default change,
+   then a reviewed removal with backup. Verify final flags, retained tracks,
+   reported backup path, and byte-identical original backup. A running edit must
+   not expose a cancel action. An intervening rescan/policy change must reject
+   stale queued selections before native editing.
+7. Check Jobs at narrow widths, keyboard cancellation/review links, failed API
+   messages, interrupted outcomes, and pagination. Failed/interrupted work must
+   never be presented as successful or automatically retried.
+
+Automated coverage: `test_jobs.py` (SQLite/PostgreSQL, native queued edits in CI),
+`test_probe_deadlines.py` (actual child termination/reaping), migration tests,
+and frontend `Jobs.test.tsx` plus the existing audio safety/regression suites.

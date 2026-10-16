@@ -157,10 +157,35 @@ class DirectoryBrowseResponse(BaseModel):
 # ============== Scan Schemas ==============
 
 
+class JobResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    kind: str
+    target_file_id: Optional[int] = None
+    target_show_id: Optional[int] = None
+    status: str
+    progress: dict
+    result: dict
+    error: Optional[str] = None
+    cancel_requested: bool
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+
+class JobListResponse(BaseModel):
+    items: list[JobResponse]
+    total: int
+
+
 class ScanStatus(BaseModel):
     """Current scan status."""
 
     is_running: bool
+    job_id: Optional[int] = None
+    job_status: Optional[str] = None
+    cancel_requested: bool = False
     current_location: Optional[str] = None
     files_scanned: int = 0
     files_total: int = 0

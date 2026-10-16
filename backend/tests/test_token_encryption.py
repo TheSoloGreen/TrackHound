@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import AsyncMock
 from fastapi import BackgroundTasks
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -6,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.api.scan import start_scan
 from app.core.encryption import decrypt_value, encrypt_value, is_encrypted
 from app.core.scan_state import scan_state_manager
+from app.core import jobs
 from app.models.entities import Base, ScanLocation, User
 from app.models.migrations import apply_token_encryption_migration
 from app.models.schemas import ScanStartRequest
@@ -42,7 +44,7 @@ async def test_token_backfill_encrypts_legacy_plaintext_rows():
 
 
 @pytest.mark.anyio
-async def test_scan_runtime_receives_decrypted_token_when_db_value_is_encrypted():
+async def test_scan_runtime_receives_decrypted_token_when_db_value_is_encrypted(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
@@ -82,8 +84,15 @@ async def test_scan_runtime_receives_decrypted_token_when_db_value_is_encrypted(
         )
 
         assert response.is_running is True
-        assert len(bg.tasks) == 1
-        assert bg.tasks[0].kwargs["user_plex_token"] == "runtime-plaintext-token"
+        assert len(bg.tasks) == 0  # No secret or work is handed to an HTTP background task.
+        assert "runtime-plaintext-token" not in str((await session.get(jobs.Job, response.job_id)).payload)
+
+    monkeypatch.setattr(jobs, "async_session_maker", session_maker)
+    run = AsyncMock()
+    monkeypatch.setattr("app.core.scanner.run_scan", run)
+    job_id = await jobs.job_manager.claim()
+    await jobs.job_manager.execute(job_id)
+    assert run.call_args.kwargs["user_plex_token"] == "runtime-plaintext-token"
 
     await scan_state_manager.reset()
     await engine.dispose()

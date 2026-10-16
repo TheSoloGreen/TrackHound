@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import pytest
 
 from app.api.auth import get_current_user
+from app.api.jobs import catalog_idle
 from app.api.scan import _invalid_scan_input, _validate_scan_media_type
 from app.main import app
 from app.models.database import get_db
@@ -27,6 +29,15 @@ app.dependency_overrides[get_current_user] = override_get_current_user
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def skip_catalog_coordination_for_input_only_tests():
+    async def idle():
+        yield
+    app.dependency_overrides[catalog_idle] = idle
+    yield
+    app.dependency_overrides.pop(catalog_idle, None)
 
 
 def test_create_scan_location_invalid_media_type_returns_400():

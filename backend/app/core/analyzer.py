@@ -2,6 +2,14 @@
 
 from typing import Optional
 import re
+import json
+import subprocess
+import sys
+import time
+
+from app.core.job_context import current_job, probe_cancellation_enabled
+
+PROBE_TIMEOUT_SECONDS = 60
 
 
 class AudioAnalysisError(RuntimeError):
@@ -146,6 +154,41 @@ class AudioAnalyzer:
         return self._mediainfo_available
 
     def analyze(self, file_path: str) -> dict:
+        """Isolate libmediainfo so a stuck native parser can be killed and reaped.
+
+        Cancellation is cooperative outside probes. Never use task cancellation
+        to abandon an in-flight media write running in a thread.
+        """
+        execution = current_job.get() if probe_cancellation_enabled.get() else None
+        if execution and execution.cancelled.is_set():
+            raise AudioAnalysisError("Analysis cancelled")
+        process = subprocess.Popen([sys.executable, "-m", "app.core.probe_child", file_path],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        deadline = time.monotonic() + PROBE_TIMEOUT_SECONDS
+        try:
+            while True:
+                if execution and execution.cancelled.is_set():
+                    raise AudioAnalysisError("Analysis cancelled")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AudioAnalysisError(f"MediaInfo exceeded its {PROBE_TIMEOUT_SECONDS}s execution deadline")
+                try:
+                    output, _ = process.communicate(timeout=min(0.2, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode:
+                raise AudioAnalysisError("MediaInfo probe failed. Check native library availability and file access.")
+            try:
+                return json.loads(output)
+            except (ValueError, UnicodeError) as exc:
+                raise AudioAnalysisError("MediaInfo returned invalid analysis output") from exc
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()  # Reap the child, including on cancellation/deadline.
+
+    def _analyze_in_process(self, file_path: str) -> dict:
         """
         Analyze a media file and extract audio track information.
         
