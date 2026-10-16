@@ -28,7 +28,7 @@ def test_analyzer_retains_raw_evidence_and_prefers_embedded_language():
     analyzer = AudioAnalyzer()
     analyzer._mediainfo_available = True
     with patch("pymediainfo.MediaInfo.parse", return_value=NS(tracks=tracks)):
-        result = analyzer.analyze("/synthetic.mkv")
+        result = analyzer._analyze_in_process("/synthetic.mkv")
     first, second = result["audio_tracks"]
     assert first["language"] is None and first["title"] == "Dolby Digital 5.1"
     assert second["language"] == "ja" and second["language_raw"] == "ja-JP"

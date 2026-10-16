@@ -11,8 +11,8 @@ from app.static import SPAStaticFiles
 
 from app.version import VERSION, BUILD_REVISION
 from app.config import get_settings
-from app.models.database import init_db
-from app.api import auth, scan, media, settings as settings_router
+from app.models.database import engine, init_db
+from app.api import auth, scan, media, jobs, settings as settings_router
 
 settings = get_settings()
 
@@ -24,8 +24,12 @@ async def lifespan(app: FastAPI):
     await init_db()
     from app.core.instance import bootstrap_instance
     await bootstrap_instance()
-    yield
-    # Shutdown (cleanup if needed)
+    from app.core.jobs import job_manager
+    await job_manager.start(engine)
+    try:
+        yield
+    finally:
+        await job_manager.stop()
 
 
 app = FastAPI(
@@ -64,6 +68,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(scan.router, prefix="/api/scan", tags=["Scanning"])
 app.include_router(media.router, prefix="/api/media", tags=["Media"])
 app.include_router(settings_router.router, prefix="/api/settings", tags=["Settings"])
+app.include_router(jobs.router, prefix="/api/jobs", tags=["Jobs"])
 
 
 @app.exception_handler(RequestValidationError)

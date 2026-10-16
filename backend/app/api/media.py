@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.auth import get_current_user
+from app.api.jobs import catalog_idle
+from app.core.jobs import job_manager
 from app.models.database import get_db
 from app.models.entities import User, Show, Season, MediaFile, AudioTrack, ScanLocation, UserPreference
 from app.models.schemas import (
@@ -32,6 +34,7 @@ from app.models.schemas import (
     AudioTrackRemovalPlan,
     BulkRescanResponse,
     MediaEditCapabilities,
+    JobResponse,
 )
 from app.services.exporter import Exporter
 from app.core.issue_filters import issue_predicate
@@ -237,12 +240,15 @@ async def _load_user_audio_track_keep_languages(db: AsyncSession, user_id: int) 
 async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_user: User) -> None:
     """Re-analyze one media file and refresh audio track + issue metadata."""
     analyzer = AudioAnalyzer()
+    # Worker sessions use expire_on_commit=False. Release the read snapshot
+    # before probing so queue admissions cannot invalidate a SQLite WAL upgrade.
+    await db.commit()
     try:
-        before = Path(mf.file_path).stat()
+        before = await asyncio.to_thread(Path(mf.file_path).stat)
         refreshed_audio = require_successful_analysis(
             await asyncio.to_thread(analyzer.analyze, mf.file_path)
         )
-        after = Path(mf.file_path).stat()
+        after = await asyncio.to_thread(Path(mf.file_path).stat)
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
             raise AudioAnalysisError("File changed during analysis. Please rescan it again.")
     except (AudioAnalysisError, OSError) as exc:
@@ -251,6 +257,8 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
             detail=f"Analysis could not be refreshed; previous metadata was preserved. {exc}",
         ) from exc
     refreshed_tracks = refreshed_audio.get("audio_tracks", [])
+
+    await db.refresh(mf, attribute_names=["show", "issue_records"])
 
     await db.execute(delete(AudioTrack).where(AudioTrack.media_file_id == mf.id))
     for track_info in refreshed_tracks:
@@ -877,7 +885,6 @@ async def get_media_file(
     return _build_media_file_response(mf)
 
 
-@router.post("/files/{file_id}/default-audio", response_model=UpdateDefaultAudioResponse)
 async def update_media_file_default_audio(
     file_id: int,
     request: UpdateDefaultAudioRequest,
@@ -895,12 +902,14 @@ async def update_media_file_default_audio(
     if not mf:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
 
-    _require_editable_current_file(mf, "default")
+    await asyncio.to_thread(_require_editable_current_file, mf, "default")
     track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
     if not track_dicts:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
 
     target = request.track_index
+    if request.expected_last_scanned is not None:
+        _require_current_selection(mf, request.expected_last_scanned)
     if target is not None:
         _require_current_selection(mf, request.expected_last_scanned)
     else:
@@ -908,6 +917,7 @@ async def update_media_file_default_audio(
         target = select_main_track(track_dicts, request.language, preferences.preferred_codecs)
     if target is None or target not in {track["index"] for track in track_dicts}:
         raise HTTPException(status_code=400, detail="No suitable main audio track matches. Review and select an exact track.")
+    await db.commit()
     if not await asyncio.to_thread(set_default_track_by_index, mf.file_path, track_dicts, target):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -966,7 +976,6 @@ async def plan_media_file_audio_tracks(
     )
 
 
-@router.post("/files/{file_id}/audio-tracks/remove", response_model=AudioTrackRemovalResponse)
 async def remove_media_file_audio_tracks(
     file_id: int,
     request: AudioTrackRemovalRequest,
@@ -990,7 +999,7 @@ async def remove_media_file_audio_tracks(
     if not mf:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media file not found")
 
-    _require_editable_current_file(mf, "remove")
+    await asyncio.to_thread(_require_editable_current_file, mf, "remove")
     track_dicts = [_audio_track_to_dict(track) for track in mf.audio_tracks]
     if not track_dicts:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No audio tracks found")
@@ -1002,7 +1011,7 @@ async def remove_media_file_audio_tracks(
     revision = policy_revision(engine, saved_keep_languages, is_anime)
     if request.expected_policy_revision is not None and request.expected_policy_revision != revision:
         raise HTTPException(status_code=409, detail="Audio preferences changed. Refresh the removal plan and review it again.")
-    if keep_track_indices is not None:
+    if keep_track_indices is not None or request.expected_last_scanned is not None:
         _require_current_selection(mf, request.expected_last_scanned)
     if keep_track_indices is None:
         keep_languages = request.keep_languages
@@ -1022,6 +1031,7 @@ async def remove_media_file_audio_tracks(
             "warnings": warnings,
         })
 
+    await db.commit()
     try:
         removal_result = await asyncio.to_thread(
             remove_unwanted_audio_tracks,
@@ -1053,7 +1063,6 @@ async def remove_media_file_audio_tracks(
     )
 
 
-@router.post("/files/{file_id}/rescan", response_model=UpdateDefaultAudioResponse)
 async def rescan_media_file(
     file_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -1078,7 +1087,6 @@ async def rescan_media_file(
     )
 
 
-@router.post("/shows/{show_id}/rescan", response_model=BulkRescanResponse)
 async def rescan_show_files(
     show_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -1155,7 +1163,7 @@ async def export_media_files(
     )
 
 
-@router.delete("/files", status_code=status.HTTP_200_OK)
+@router.delete("/files", status_code=status.HTTP_200_OK, dependencies=[Depends(catalog_idle)])
 async def reset_media_library(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -1184,3 +1192,51 @@ async def reset_media_library(
         "deleted_files": media_deleted,
         "deleted_shows": shows_deleted,
     }
+
+
+async def _queue_file_job(db, current_user, file_id, kind, request=None):
+    mf = await db.scalar(select(MediaFile).where(MediaFile.id == file_id, MediaFile.user_id == current_user.id))
+    if not mf:
+        raise HTTPException(404, "Media file not found")
+    payload = {"file_id": file_id}
+    if request is not None:
+        # Admission checks server capabilities without touching a potentially
+        # stalled media mount. The worker performs full filesystem preflight.
+        caps = get_media_edit_capabilities()
+        reason = caps.default_audio_reason if kind == "default_audio" else caps.track_removal_reason
+        if reason:
+            raise HTTPException(403, reason)
+        if request.expected_last_scanned is not None:
+            _require_current_selection(mf, request.expected_last_scanned)
+        else:
+            request.expected_last_scanned = mf.last_scanned
+        payload["request"] = request.model_dump(mode="json")
+    return await job_manager.enqueue(db, current_user.id, kind, payload)
+
+
+@router.post("/files/{file_id}/default-audio", response_model=JobResponse, status_code=202)
+async def queue_default_audio(file_id: int, request: UpdateDefaultAudioRequest,
+                             current_user: Annotated[User, Depends(get_current_user)],
+                             db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _queue_file_job(db, current_user, file_id, "default_audio", request)
+
+
+@router.post("/files/{file_id}/audio-tracks/remove", response_model=JobResponse, status_code=202)
+async def queue_audio_removal(file_id: int, request: AudioTrackRemovalRequest,
+                             current_user: Annotated[User, Depends(get_current_user)],
+                             db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _queue_file_job(db, current_user, file_id, "remove_audio", request)
+
+
+@router.post("/files/{file_id}/rescan", response_model=JobResponse, status_code=202)
+async def queue_file_rescan(file_id: int, current_user: Annotated[User, Depends(get_current_user)],
+                            db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _queue_file_job(db, current_user, file_id, "rescan_file")
+
+
+@router.post("/shows/{show_id}/rescan", response_model=JobResponse, status_code=202)
+async def queue_show_rescan(show_id: int, current_user: Annotated[User, Depends(get_current_user)],
+                            db: Annotated[AsyncSession, Depends(get_db)]):
+    if not await db.scalar(select(Show.id).where(Show.id == show_id, Show.user_id == current_user.id)):
+        raise HTTPException(404, "Show not found")
+    return await job_manager.enqueue(db, current_user.id, "rescan_show", {"show_id": show_id})

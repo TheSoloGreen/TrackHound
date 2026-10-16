@@ -28,6 +28,7 @@ from app.core.classification import anime_folder_match, classify_show
 from app.core.audio_roles import audio_role, select_main_track
 from app.core.issue_catalog import apply_evaluation
 from app.core.scan_state import scan_state_manager
+from app.core.job_context import current_job, finish_write_verification
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +146,12 @@ class MediaScanner:
 
         if set_default_track_by_index(file_path, audio_tracks, english_index):
             logger.info("Auto-fixed default audio track to English: %s", file_path)
+        else:
+            logger.warning("Auto-fix skipped or failed for file: %s", file_path)
+        # A failed verification may follow a partial native edit. Cancellation
+        # waits for the bounded post-edit analysis so cached flags stay current.
+        with finish_write_verification():
             return self.analyzer.analyze(file_path)
-
-        logger.warning("Auto-fix skipped or failed for file: %s", file_path)
-        return self.analyzer.analyze(file_path)  # A failed verification may follow a partial native edit.
 
     def discover_files(self, location: str) -> list[str]:
         """Fail the location on unreadable directories instead of returning a partial list."""
@@ -161,6 +164,9 @@ class MediaScanner:
             raise error
 
         for root, _, names in os.walk(root_path, onerror=fail):
+            execution = current_job.get()
+            if execution and execution.cancelled.is_set():
+                raise InterruptedError("File discovery cancelled")
             for name in names:
                 if name.startswith(".trackhound-") or Path(name).suffix.lower() not in self.extensions:
                     continue
@@ -188,6 +194,8 @@ class MediaScanner:
                     await db.rollback()
                 if not prepared:
                     prepared.update(await self._prepare_file(file_path, base_path, media_type, user_id))
+                if managed and await scan_state_manager.is_cancel_requested(user_id):
+                    return None
                 async with db.begin_nested():
                     result = await self._process_file(file_path, base_path, media_type, user_id, db, prepared)
                 if managed:

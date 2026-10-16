@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from app.models.schemas import ScanStatus
+from app.core.job_context import current_job
 
 
 class ScanStateManager:
@@ -56,7 +57,15 @@ class ScanStateManager:
     async def is_cancel_requested(self, user_id: int) -> bool:
         """Check whether cancellation has been requested."""
         async with self._lock:
-            return self._cancel_requested_by_user.get(user_id, False)
+            execution = current_job.get()
+            return self._cancel_requested_by_user.get(user_id, False) or bool(
+                execution and execution.user_id == user_id and execution.cancelled.is_set())
+
+    async def _persist(self, status: ScanStatus, *, force=False):
+        if current_job.get():
+            from app.core.jobs import job_manager
+            await job_manager.save_progress(status.model_dump(mode="json"), force=force)
+        return status.model_copy(deep=True)
 
     async def update_status(self, user_id: int, **kwargs) -> ScanStatus:
         """Update scan status fields and return a copy of the new state."""
@@ -65,7 +74,7 @@ class ScanStateManager:
             current = status.model_dump()
             current.update(kwargs)
             self._status_by_user[user_id] = ScanStatus(**current)
-            return self._status_by_user[user_id].model_copy(deep=True)
+            return await self._persist(self._status_by_user[user_id])
 
     async def append_error(self, user_id: int, error: str) -> ScanStatus:
         """Append an error message to scan status."""
@@ -74,7 +83,7 @@ class ScanStateManager:
             status.error_count += 1
             if len(status.errors) < 50:
                 status.errors.append(error)
-            return status.model_copy(deep=True)
+            return await self._persist(status)
 
     async def append_warning(self, user_id: int, warning: str) -> ScanStatus:
         async with self._lock:
@@ -82,13 +91,14 @@ class ScanStateManager:
             status.warning_count += 1
             if len(status.warnings) < 50:
                 status.warnings.append(warning)
-            return status.model_copy(deep=True)
+            return await self._persist(status)
 
     async def finish_scan(self, user_id: int, *, failed: bool = False) -> ScanStatus:
         """Transition to not running while keeping progress context."""
         async with self._lock:
             status = self._get_or_create_status(user_id)
-            cancelled = self._cancel_requested_by_user.get(user_id, False)
+            execution = current_job.get()
+            cancelled = self._cancel_requested_by_user.get(user_id, False) or bool(execution and execution.cancelled.is_set())
             status.outcome = ("failed" if failed else "cancelled" if cancelled else
                               "completed_with_errors" if status.error_count or status.warning_count else "completed")
             status.finished_at = datetime.now(timezone.utc)
@@ -96,7 +106,7 @@ class ScanStateManager:
             status.is_running = False
             status.current_location = None
             status.current_file = None
-            return status.model_copy(deep=True)
+            return await self._persist(status, force=True)
 
     async def reset(self) -> None:
         """Reset state for tests."""

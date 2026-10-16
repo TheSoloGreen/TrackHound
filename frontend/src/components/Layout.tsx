@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import BuildVersion from './BuildVersion'
+import { useJobs } from '../hooks/useJobs'
 
 interface LayoutProps {
   children: React.ReactNode
@@ -21,11 +22,13 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/library', icon: Library, label: 'Library' },
   { to: '/files', icon: FileVideo, label: 'Files' },
+  { to: '/jobs', icon: Library, label: 'Jobs' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
 export default function Layout({ children }: LayoutProps) {
   useScanStatus()
+  useJobs()
   const { user, logout, authRequired } = useAuth()
   const navigate = useNavigate()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)

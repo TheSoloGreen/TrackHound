@@ -10,6 +10,7 @@ from app.api.auth import get_current_user
 from app.api.media import router as media_router
 from app.api.scan import router as scan_router
 from app.core.scan_state import scan_state_manager
+from app.core.jobs import job_manager
 from app.models.database import get_db
 from app.models.entities import Base, User, Show, ScanLocation, MediaFile
 
@@ -244,8 +245,9 @@ async def test_scan_status_is_isolated_per_user(test_app):
     async def current_user_b():
         return users["b"]
 
-    await scan_state_manager.start_scan(users["a"].id)
-    await scan_state_manager.start_scan(users["b"].id)
+    async with users["session_maker"]() as db:
+        await job_manager.enqueue(db, users["a"].id, "scan", {"location_ids": [], "incremental": True})
+        await job_manager.enqueue(db, users["b"].id, "scan", {"location_ids": [], "incremental": True})
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -270,7 +272,8 @@ async def test_user_cannot_cancel_another_users_scan(test_app):
     async def current_user_b():
         return users["b"]
 
-    await scan_state_manager.start_scan(users["a"].id)
+    async with users["session_maker"]() as db:
+        await job_manager.enqueue(db, users["a"].id, "scan", {"location_ids": [], "incremental": True})
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

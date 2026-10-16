@@ -5,6 +5,7 @@ Media audio track scanner with Plex integration. Scans your media library to ide
 ## Features
 
 - **Multi-Location Scanning**: Scan media files across multiple NAS drives/mount points
+- **Durable Jobs**: Queued scans, rescans, and individual edits with saved progress, cancellation, and restart reporting
 - **Audio Track Analysis**: Extract detailed audio track information (language, codec, channels, bitrate)
 - **Flexible Sign-in**: Use a local username/password or optional Plex sign-in; connect Plex for metadata
 - **Anime Detection**: Automatically identify anime from Plex genres, folder names, or manual tagging
@@ -78,7 +79,7 @@ accounts. Local scanning works without a Plex connection.
 ### Confirming a container update
 
 The footer on every page, including Login, displays the running server's version
-and build revision, for example `TrackHound v0.3.0 · abc123def456`. Hover over the
+and build revision, for example `TrackHound v0.4.0 · abc123def456`. Hover over the
 label for the full revision. `/api/info` returns the same values without caching;
 `/api/health` also includes them. Published images embed the Git commit of the
 merged build, so successive builds are distinguishable even within one release.

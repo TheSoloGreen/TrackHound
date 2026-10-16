@@ -106,6 +106,7 @@ export default function ShowDetailPage() {
   libraryParams.delete('season')
   const libraryLink = `/library?${libraryParams}`
   const [rescanError, setRescanError] = useState<string | null>(null)
+  const [queuedJob, setQueuedJob] = useState<number | null>(null)
 
   const showId = Number(id)
 
@@ -129,7 +130,9 @@ export default function ShowDetailPage() {
 
   const rescanFileMutation = useMutation({
     mutationFn: (fileId: number) => mediaApi.rescanFile(fileId),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      setQueuedJob(response.data.id)
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       setRescanError(null)
       return refreshLibrary(queryClient)
     },
@@ -142,7 +145,9 @@ export default function ShowDetailPage() {
 
   const rescanShowMutation = useMutation({
     mutationFn: () => mediaApi.rescanShow(showId),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      setQueuedJob(response.data.id)
+      void queryClient.invalidateQueries({ queryKey: ['jobs'] })
       setRescanError(null)
       return refreshLibrary(queryClient)
     },
@@ -247,6 +252,7 @@ export default function ShowDetailPage() {
         </div>
       </div>
 
+      {queuedJob && <p role="status" className="text-sm text-orange-700 dark:text-orange-400">Job #{queuedJob} queued. <Link className="underline" to="/jobs">View progress and results in Jobs</Link>.</p>}
       {rescanError && (
         <div className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
           <p className="text-sm text-red-700 dark:text-red-400">{rescanError}</p>

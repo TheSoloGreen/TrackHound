@@ -8,9 +8,10 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user
-from app.core.encryption import decrypt_value
+from app.api.jobs import catalog_idle
+from app.core.jobs import ACTIVE, job_manager, scan_status
 from app.models.database import get_db
-from app.models.entities import ScanLocation, User
+from app.models.entities import Job, ScanLocation, User
 from app.models.schemas import (
     DirectoryBrowseResponse,
     DirectoryEntry,
@@ -150,6 +151,7 @@ async def list_scan_locations(
     "/locations",
     response_model=ScanLocationResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(catalog_idle)],
 )
 async def create_scan_location(
     location: ScanLocationCreate,
@@ -217,7 +219,7 @@ async def get_scan_location(
     return location
 
 
-@router.patch("/locations/{location_id}", response_model=ScanLocationResponse)
+@router.patch("/locations/{location_id}", response_model=ScanLocationResponse, dependencies=[Depends(catalog_idle)])
 async def update_scan_location(
     location_id: int,
     updates: ScanLocationUpdate,
@@ -252,7 +254,7 @@ async def update_scan_location(
     return location
 
 
-@router.delete("/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(catalog_idle)])
 async def delete_scan_location(
     location_id: int,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -287,12 +289,14 @@ async def delete_scan_location(
 @router.get("/status", response_model=ScanStatus)
 async def get_scan_status(
     current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Get current scan status."""
-    return await scan_state_manager.get_status(current_user.id)
+    job = await db.scalar(select(Job).where(Job.user_id == current_user.id, Job.kind == "scan").order_by(Job.id.desc()).limit(1))
+    return scan_status(job) if job else ScanStatus(is_running=False)
 
 
-@router.post("/start", response_model=ScanStatus)
+@router.post("/start", response_model=ScanStatus, status_code=status.HTTP_202_ACCEPTED)
 async def start_scan(
     request: ScanStartRequest,
     background_tasks: BackgroundTasks,
@@ -333,48 +337,22 @@ async def start_scan(
             detail="No enabled scan locations found",
         )
 
-    started_status = await scan_state_manager.start_scan(current_user.id)
-    if started_status is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A scan is already in progress",
-        )
-
-    # Import here to avoid circular imports
-    from app.core.scanner import run_scan
-
-    # An unreadable saved Plex token must not prevent local filesystem scanning.
-    plex_warning = None
-    try:
-        plex_token = decrypt_value(current_user.plex_token) if current_user.plex_token else None
-    except ValueError:
-        plex_token = None
-        plex_warning = "Stored Plex credentials are unavailable. Local scanning continues; sign in again to reconnect Plex."
-
-    # Start scan in background
-    background_tasks.add_task(
-        run_scan,
-        locations=[loc.path for loc in locations],
-        location_media_types={loc.path: loc.media_type for loc in locations},
-        incremental=request.incremental,
-        user_id=current_user.id,
-        user_plex_token=plex_token,
-        plex_warning=plex_warning,
-    )
-
-    return started_status
+    job = await job_manager.enqueue(db, current_user.id, "scan", {
+        "location_ids": [loc.id for loc in locations], "incremental": request.incremental,
+    })
+    return scan_status(job)
 
 
 @router.post("/cancel", response_model=ScanStatus)
 async def cancel_scan(
     current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """Cancel the current scan."""
-    cancelled_status = await scan_state_manager.cancel_scan(current_user.id)
-    if cancelled_status is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No scan is currently running",
-        )
-
-    return cancelled_status
+    async with job_manager.coordination:
+        job = await db.scalar(select(Job).where(Job.user_id == current_user.id, Job.kind == "scan", Job.status.in_(ACTIVE)).limit(1))
+        if not job:
+            raise HTTPException(400, "No scan is currently queued or running")
+        await db.refresh(job)
+        await job_manager.cancel(db, job)
+        return scan_status(job)

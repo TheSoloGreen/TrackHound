@@ -266,3 +266,32 @@ class ScanLocation(Base):
 
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="scan_locations")
+
+
+class Job(Base):
+    """Durable work queue. Payloads contain IDs/options, never credentials."""
+
+    __tablename__ = "jobs"
+    __table_args__ = (Index("ix_jobs_user_status_id", "user_id", "status", "id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    # A unique nullable reservation prevents duplicate library scans, including queued scans.
+    active_key: Mapped[Optional[str]] = mapped_column(String(64), unique=True, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    progress: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    @property
+    def target_file_id(self) -> Optional[int]:
+        return self.payload.get("file_id")
+
+    @property
+    def target_show_id(self) -> Optional[int]:
+        return self.payload.get("show_id")
