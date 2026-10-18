@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.release import promote, release_section, validate_versions, verified_source
+from app.version import VERSION
 
 REVISION = "1" * 40
 DIGEST = "sha256:" + "a" * 64
@@ -98,4 +99,4 @@ def test_detects_a_bad_promotion_digest():
 
 
 def test_repo_versions_and_current_release_notes_are_aligned():
-    assert validate_versions(Path(__file__).resolve().parents[2]) == "0.5.0"
+    assert validate_versions(Path(__file__).resolve().parents[2]) == VERSION

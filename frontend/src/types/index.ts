@@ -121,6 +121,8 @@ export interface MediaFile {
   issue_details: string | null
   issues?: { code: string; severity: 'error' | 'warning'; message: string; details: Record<string, unknown> }[]
   issue_evaluation_version?: number | null
+  analysis_version?: number | null
+  issue_policy_revision?: string | null
   language_review_note?: string | null
   audio_tracks: AudioTrack[]
   edit_capabilities?: MediaEditCapabilities

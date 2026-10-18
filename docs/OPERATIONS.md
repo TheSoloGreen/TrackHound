@@ -117,6 +117,11 @@ analysis; incremental scans now re-probe those records instead of skipping them.
 New successful no-audio analyses are tracked explicitly and can be reevaluated
 without another probe. A failed physical probe preserves previous analysis.
 
+For future implementation changes, increment `EVALUATION_VERSION` when evaluator
+semantics change, and `ANALYSIS_VERSION` when saved probe evidence needs refreshing.
+Evaluation revisions include the evaluator version, so existing cached results
+become visibly pending rather than silently appearing current under changed code.
+
 Back up the catalog and both keys before upgrading. Migration only changes the
 catalog, not media. Roll back with the matching pre-upgrade catalog and image;
 do not start an older app against the newer schema.
