@@ -1,6 +1,19 @@
 # Changelog
 
-## 0.4.0 — release candidate
+## 0.5.0
+
+Cached policy reevaluation and versioned release markers (issues #81, #75):
+
+- Saving changed audio-evaluation rules atomically queues a read-only cached reevaluation. Rapid saves coalesce; older running policy jobs stop as superseded.
+- Settings shows current/pending/missing-analysis counts and a manual retry action. Jobs retains revision, progress, outcomes, and files requiring a physical scan.
+- Reevaluation preserves tracks, review notes, title classifications, and scan timestamps. It never probes media, contacts Plex, or invokes edits—even with automatic default fixing enabled.
+- Migration `0010_cached_evaluation` separates successful analysis from policy freshness. Existing cached tracks remain reusable; ambiguous historical empty analyses require a physical scan. Incremental scanning now re-probes records without current analysis.
+- Release checks validate aligned backend/frontend/lockfile versions and changelog notes. A matching `vX.Y.Z` tag on a master-reachable commit gates a stable `X.Y.Z` container tag and GitHub release behind the full checks.
+- Stable tags promote the already-published SHA image by digest, refuse to overwrite a different existing version, and leave `latest` unchanged. Normal master builds still publish `latest` and SHA tags.
+
+Back up the catalog and retain both keys before upgrading. Initially keep media writes disabled. Cached audio reevaluation uses saved title classification; anime detection/extension changes still apply on subsequent scans. Roll back the image and matching pre-upgrade catalog together. See [release and upgrade operations](docs/OPERATIONS.md) and the [live test checklist](docs/REVIEW_REGRESSIONS.md).
+
+## 0.4.0
 
 Durable bounded execution (issue #64):
 

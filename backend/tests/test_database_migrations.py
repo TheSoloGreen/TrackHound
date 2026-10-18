@@ -87,7 +87,7 @@ async def seed_legacy(engine, version):
 
 async def assert_upgraded(engine):
     async with engine.connect() as connection:
-        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0009_durable_jobs"
+        assert await connection.scalar(text("SELECT version_num FROM alembic_version")) == "0010_cached_evaluation"
         diffs = await connection.run_sync(lambda sync: compare_metadata(MigrationContext.configure(sync), Base.metadata))
         assert diffs == []
         if connection.dialect.name == "sqlite":
@@ -124,6 +124,9 @@ async def test_historical_upgrade_preserves_rows_and_matches_models(database, ve
     await seed_legacy(database, version)
     await upgrade_database(database)
     await assert_upgraded(database)
+    async with database.connect() as connection:
+        assert await connection.scalar(text("SELECT analysis_version FROM media_files")) == 1
+        assert await connection.scalar(text("SELECT issue_policy_revision FROM media_files")) is None
     async with database.connect() as connection:
         assert decrypt_value(await connection.scalar(text("SELECT plex_token FROM users WHERE plex_user_id='123'"))) == "legacy-plex-token"
         row = (await connection.execute(text("SELECT user_id, show_id, season_id, file_size FROM media_files"))).one()

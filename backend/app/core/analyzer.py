@@ -10,6 +10,7 @@ import time
 from app.core.job_context import current_job, probe_cancellation_enabled
 
 PROBE_TIMEOUT_SECONDS = 60
+ANALYSIS_VERSION = 1
 
 
 class AudioAnalysisError(RuntimeError):

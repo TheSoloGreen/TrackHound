@@ -103,6 +103,8 @@ export const mediaApi = {
 
 // Settings API
 export const settingsApi = {
+  getEvaluation: () => api.get('/api/settings/evaluation'),
+  reevaluate: () => api.post('/api/settings/reevaluate'),
   get: () => api.get('/api/settings'),
   update: (data: object) => api.put('/api/settings', data),
   reset: () => api.delete('/api/settings'),

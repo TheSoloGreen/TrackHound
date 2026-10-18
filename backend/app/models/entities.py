@@ -182,6 +182,8 @@ class MediaFile(Base):
     has_issues: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     issue_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     issue_evaluation_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    analysis_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    issue_policy_revision: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     language_review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships

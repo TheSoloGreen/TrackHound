@@ -6,6 +6,7 @@ Media audio track scanner with Plex integration. Scans your media library to ide
 
 - **Multi-Location Scanning**: Scan media files across multiple NAS drives/mount points
 - **Durable Jobs**: Queued scans, rescans, and individual edits with saved progress, cancellation, and restart reporting
+- **Cached Policy Refresh**: Apply changed audio rules to saved analysis without rereading or editing media files
 - **Audio Track Analysis**: Extract detailed audio track information (language, codec, channels, bitrate)
 - **Flexible Sign-in**: Use a local username/password or optional Plex sign-in; connect Plex for metadata
 - **Anime Detection**: Automatically identify anime from Plex genres, folder names, or manual tagging
@@ -79,12 +80,25 @@ accounts. Local scanning works without a Plex connection.
 ### Confirming a container update
 
 The footer on every page, including Login, displays the running server's version
-and build revision, for example `TrackHound v0.4.0 · abc123def456`. Hover over the
+and build revision, for example `TrackHound v0.5.0 · abc123def456`. Hover over the
 label for the full revision. `/api/info` returns the same values without caching;
 `/api/health` also includes them. Published images embed the Git commit of the
 merged build, so successive builds are distinguishable even within one release.
 Local builds show `development` unless you pass
 `docker build --build-arg BUILD_REVISION=$(git rev-parse HEAD) -t trackhound .`.
+
+Master builds publish `ghcr.io/thesologreen/trackhound:latest` and a commit-pinned
+`sha-<commit>` tag. Starting with the 0.5.0 release workflow, approved `vX.Y.Z`
+Git tags publish a checked `ghcr.io/thesologreen/trackhound:X.Y.Z` image and GitHub
+release notes. A version tag is available only after its release workflow succeeds;
+bumping the app version alone does not publish it. See [release operations](docs/OPERATIONS.md#versioned-releases).
+
+Pulling an image does not replace an existing running container. Recreate the
+container with the intended repository/tag while preserving its appdata mapping,
+keys, and media mounts. The bundled Compose files use `build: .`; they build a
+local checkout instead of pulling the registry image. To use published images,
+use an `image:`-based deployment definition instead of `build:`. Verify `/api/info`
+after updating rather than relying on the container manager's update message.
 
 Plex sign-in is restricted to the numeric account IDs in `ALLOWED_PLEX_USER_IDS`.
 A non-empty list controls both new Plex logins and existing Plex sessions.

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useState } from 'react'
 import { apiError } from '../api/errors'
 import PreferencesForm from '../components/PreferencesForm'
+import PolicyEvaluation from '../components/PolicyEvaluation'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, FolderOpen, ChevronRight, Folder } from 'lucide-react'
 import { settingsApi, scanApi, mediaApi } from '../api/client'
@@ -336,6 +337,7 @@ export default function SettingsPage() {
         )}
       </section>
 
+      <PolicyEvaluation />
       {settings ? <PreferencesForm initialSettings={settings} editCapabilities={editCapabilities} />
         : <p role="alert">Could not load preferences. Refresh the page to try again.</p>}
     </div>

@@ -21,6 +21,7 @@ export function useJobs(offset = 0) {
     completions.set(cacheQuery, marker)
     void refreshLibrary(client)
     void client.invalidateQueries({ queryKey: ['scanStatus'] })
+    void client.invalidateQueries({ queryKey: ['audioEvaluation'] })
   }, [query.data, client, offset])
   return query
 }

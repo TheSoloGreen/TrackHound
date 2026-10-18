@@ -45,7 +45,7 @@ from app.models.schemas import IssueCategory, LanguageReviewRequest
 
 router = APIRouter()
 
-from app.core.analyzer import AudioAnalyzer, AudioAnalysisError, require_successful_analysis
+from app.core.analyzer import ANALYSIS_VERSION, AudioAnalyzer, AudioAnalysisError, require_successful_analysis
 from app.core.media_access import get_media_edit_capabilities
 from app.core.classification import classify_show
 from app.core.audio_roles import audio_role, select_main_track
@@ -168,6 +168,8 @@ def _build_media_file_response(mf: MediaFile) -> MediaFileResponse:
                 for issue in mf.issue_records] if mf.issue_evaluation_version is not None else
                [issue.to_dict() for issue in legacy_issues(mf.issue_details, mf.has_issues)],
         issue_evaluation_version=mf.issue_evaluation_version,
+        analysis_version=mf.analysis_version,
+        issue_policy_revision=mf.issue_policy_revision,
         audio_tracks=_build_audio_track_responses(mf.audio_tracks),
         edit_capabilities=get_media_edit_capabilities(mf.file_path),
     )
@@ -280,6 +282,7 @@ async def _refresh_media_file_analysis(db: AsyncSession, mf: MediaFile, current_
 
     mf.container_format = refreshed_audio.get("container")
     mf.duration_ms = refreshed_audio.get("duration_ms")
+    mf.analysis_version = ANALYSIS_VERSION
     mf.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
     mf.file_size = after.st_size
     mf.last_modified = datetime.fromtimestamp(after.st_mtime)
