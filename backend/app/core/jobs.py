@@ -41,21 +41,32 @@ class JobManager:
 
     async def enqueue(self, db, user_id, kind, payload):
         async with self.coordination:
-            count = await db.scalar(select(func.count(Job.id)).where(Job.user_id == user_id, Job.status.in_(ACTIVE)))
-            if count >= 100:
-                raise HTTPException(429, "The work queue is full. Wait for existing jobs to finish.")
-            job = Job(user_id=user_id, kind=kind, payload=payload,
-                      active_key=f"scan:{user_id}" if kind == "scan" else
-                                 f"file:{user_id}:{payload['file_id']}" if "file_id" in payload else
-                                 f"show:{user_id}:{payload['show_id']}")
-            db.add(job)
-            try:
-                await db.commit()  # Durable before acknowledging the request or waking the worker.
-            except IntegrityError as exc:
-                await db.rollback()
-                raise HTTPException(409, "A job for this target is already queued or running.") from exc
-            self.wake.set()
-            return job
+            return await self.enqueue_locked(db, user_id, kind, payload)
+
+    async def enqueue_locked(self, db, user_id, kind, payload):
+        """Caller holds coordination; commit pending preferences and work together."""
+        if kind == "reevaluate":
+            pending = await db.scalar(select(Job).where(Job.user_id == user_id, Job.kind == kind, Job.status == "queued"))
+            if pending:
+                pending.payload = payload  # Coalesce rapid saves into the newest policy.
+                await db.commit()
+                self.wake.set()
+                return pending
+        count = await db.scalar(select(func.count(Job.id)).where(Job.user_id == user_id, Job.status.in_(ACTIVE)))
+        if count >= 100:
+            raise HTTPException(429, "The work queue is full. Wait for existing jobs to finish.")
+        job = Job(user_id=user_id, kind=kind, payload=payload,
+                  active_key=f"{kind}:{user_id}" if kind in ("scan", "reevaluate") else
+                             f"file:{user_id}:{payload['file_id']}" if "file_id" in payload else
+                             f"show:{user_id}:{payload['show_id']}")
+        db.add(job)
+        try:
+            await db.commit()  # Durable before acknowledging the request or waking the worker.
+        except IntegrityError as exc:
+            await db.rollback()
+            raise HTTPException(409, "A job for this target is already queued or running.") from exc
+        self.wake.set()
+        return job
 
     @asynccontextmanager
     async def catalog_mutation(self, db, user_id):
@@ -123,6 +134,10 @@ class JobManager:
             next_id = select(Job.id).where(Job.status == "queued").order_by(Job.id).limit(1).scalar_subquery()
             job_id = await db.scalar(update(Job).where(Job.id == next_id, Job.status == "queued").values(
                 status="running", started_at=utcnow()).returning(Job.id))
+            if job_id:
+                # A running reevaluation may have one coalesced successor for a
+                # newer policy. Media/scan reservations stay held until finish.
+                await db.execute(update(Job).where(Job.id == job_id, Job.kind == "reevaluate").values(active_key=None))
             await db.commit()
             return job_id
 
@@ -158,6 +173,9 @@ class JobManager:
                 outcome = "cancelled"
             elif kind == "scan":
                 result, outcome = await self.execute_scan(user_id, payload)
+            elif kind == "reevaluate":
+                from app.core.reevaluation import reevaluate_catalog
+                result, outcome = await reevaluate_catalog(user_id, payload, self.save_progress)
             else:
                 result, outcome = await self.execute_media(user_id, kind, payload)
         except Exception as exc:

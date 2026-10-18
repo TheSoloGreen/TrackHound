@@ -172,3 +172,34 @@ Back up the catalog and keys, record the current image, and initially keep
 Automated coverage: `test_jobs.py` (SQLite/PostgreSQL, native queued edits in CI),
 `test_probe_deadlines.py` (actual child termination/reaping), migration tests,
 and frontend `Jobs.test.tsx` plus the existing audio safety/regression suites.
+
+## 0.5.0 live test
+
+Back up the catalog/keys first and keep media writes disabled. This checkpoint
+does not itself authorize a deployment, release tag, or production preference change.
+
+1. Verify version 0.5.0 and the intended merged revision in `/api/info`. On an
+   upgraded catalog, open Settings → Cached audio policy. Existing saved tracks
+   should be pending reevaluation; historical empty analyses may need a scan.
+2. Queue cached reevaluation. Reload/navigate away and watch saved progress in
+   Jobs. Confirm issue counts/filters/exports update after completion, while file
+   scan timestamps, review notes, raw track tags and media timestamps stay intact.
+3. In a disposable catalog, change an audio requirement or codec preference.
+   Confirm saving queues reevaluation automatically. Save another rule rapidly;
+   the queued work should use the newest policy, and old running revisions should
+   show superseded. Automatic-edit preferences must not cause media writes here.
+4. Cancel a multi-batch reevaluation and retry. Earlier batches remain committed;
+   retry completes pending files. Restart during a read-only job in a disposable
+   catalog and verify interrupted reporting and a working manual retry.
+5. Compare missing-cache records with a newly analyzed zero-audio fixture. Only
+   absent/untrusted analysis needs another physical probe. Confirm an incremental
+   scan re-probes the missing-cache record; otherwise unchanged records stay fast.
+6. For an explicitly approved version release, tag the merged, already-published
+   commit and wait for the tag workflow. Verify `X.Y.Z` and its source SHA resolve
+   to the same digest and `latest` has not moved. Wrong version/ancestor/revision
+   or conflicting existing version tags must fail before publication.
+
+Coverage: `test_reevaluation.py`, cached-analysis migration checks,
+`test_release.py`, `PolicyEvaluation.test.tsx`, and existing queue/audio/native
+integration regressions. Actual version-tag promotion remains an approval-gated
+release operation, not something a PR test publishes.

@@ -39,7 +39,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
         setGenres(response.anime_detection.anime_genres.join(', '))
         setExtensions(response.file_extensions.join(', '))
       }
-      return queryClient.invalidateQueries({ queryKey: ['trackRemovalPlan'] })
+      return Promise.all(['trackRemovalPlan', 'audioEvaluation', 'jobs'].map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
     },
     onSettled: () => { inFlight.current = false },
   })
@@ -340,7 +340,7 @@ export default function PreferencesForm({ initialSettings, editCapabilities }: {
         <p role="status" className="text-sm text-gray-600 dark:text-gray-400">
           {save.isPending ? 'Saving preferences…' : dirty ? 'Unsaved changes' : save.isSuccess ? 'Preferences saved' : 'No unsaved changes'}
         </p>
-        <p className="text-sm text-gray-600 dark:text-gray-400">Run a full scan after saving to apply changes to unchanged files.</p>
+        <p className="text-sm text-gray-600 dark:text-gray-400">Changed audio rules automatically queue a cached reevaluation without reading or editing media. Detection/extension changes apply on subsequent scans.</p>
       </div>
       {save.isError && <p role="alert" className="text-sm text-red-600 dark:text-red-400">
         Could not save preferences. {typeof errorDetail === 'string' ? errorDetail : 'Please try again.'} Your edits have been kept.

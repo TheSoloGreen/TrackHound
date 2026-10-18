@@ -9,6 +9,7 @@ import type { Job } from '../types'
 const labels: Record<Job['kind'], string> = {
   scan: 'Library scan', rescan_file: 'File rescan', rescan_show: 'Title rescan',
   default_audio: 'Default audio edit', remove_audio: 'Audio track removal',
+  reevaluate: 'Cached audio reevaluation',
 }
 const date = (value: string) => new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString()
 
@@ -31,6 +32,7 @@ export default function JobsPage() {
       {job.progress.files_total !== undefined && <p>{job.progress.files_scanned || 0} / {job.progress.files_total} files processed</p>}
       {job.progress.current_file && job.status === 'running' && <p>{job.progress.current_file}</p>}
       {job.result.message && <p>{job.result.message}</p>}
+      {job.kind === 'reevaluate' && job.result.policy_revision && <p className="text-sm">{job.result.reevaluated || 0} reevaluated · {job.result.unchanged || 0} already current · {job.result.needs_scan || 0} need a physical scan</p>}
       {job.target_file_id && <Link className="underline text-orange-600" to={`/files?file_id=${job.target_file_id}&expanded=${job.target_file_id}`}>Review file #{job.target_file_id}</Link>}
       {job.target_show_id && <Link className="underline text-orange-600" to={`/library/${job.target_show_id}`}>Review title #{job.target_show_id}</Link>}
       {job.result.backup_path && <p>Original backup: {job.result.backup_path}</p>}

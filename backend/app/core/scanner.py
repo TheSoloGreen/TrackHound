@@ -16,7 +16,7 @@ from sqlalchemy.exc import OperationalError
 
 from app.models.database import async_session_maker
 from app.models.entities import MediaFile, Show, Season, ScanLocation, AudioTrack
-from app.core.analyzer import AudioAnalyzer, require_successful_analysis
+from app.core.analyzer import ANALYSIS_VERSION, AudioAnalyzer, require_successful_analysis
 from app.core.artwork import artwork_reference
 from app.core.media_access import get_media_edit_capabilities
 from app.core.plex_connector import PlexConnector
@@ -185,7 +185,7 @@ class MediaScanner:
             try:
                 existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
                 before = await asyncio.to_thread(os.stat, file_path)
-                if incremental and existing and existing.last_modified == datetime.fromtimestamp(before.st_mtime) and existing.file_size == before.st_size:
+                if incremental and existing and existing.analysis_version == ANALYSIS_VERSION and existing.last_modified == datetime.fromtimestamp(before.st_mtime) and existing.file_size == before.st_size:
                     if managed:
                         await db.commit()
                     return existing
@@ -309,6 +309,7 @@ class MediaScanner:
         media_file.file_size = after.st_size
         media_file.container_format = audio.get("container")
         media_file.duration_ms = audio.get("duration_ms")
+        media_file.analysis_version = ANALYSIS_VERSION
         media_file.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
         media_file.last_modified = datetime.fromtimestamp(after.st_mtime)
         apply_evaluation(media_file, self.preference_engine, audio.get("audio_tracks", []), is_anime)

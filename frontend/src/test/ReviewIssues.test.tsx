@@ -58,6 +58,8 @@ it('ignores malformed page/filter values and never follows external return links
 })
 
 function setupSettings() {
+  vi.spyOn(settingsApi, 'getEvaluation').mockResolvedValue({ data: { policy_revision: 'test', files_total: 1,
+    files_current: 1, files_pending: 0, files_needing_scan: 0, latest_job: null } } as never)
   vi.spyOn(settingsApi, 'get').mockResolvedValue({ data: settings } as never)
   vi.spyOn(mediaApi, 'getCapabilities').mockResolvedValue({ data: mediaFile.edit_capabilities } as never)
   vi.spyOn(scanApi, 'getLocations').mockResolvedValue({ data: [{ id: 1, label: 'Movies', path: '/media/movies', media_type: 'movie', enabled: true, file_count: 1 }] } as never)

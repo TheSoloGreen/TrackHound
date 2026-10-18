@@ -86,6 +86,82 @@ keys before upgrading from 0.3.0; migration `0009_durable_jobs` only adds a queu
 table. For rollback, restore the old image and its matching pre-upgrade catalog
 backup rather than starting 0.3.0 against a newer schema.
 
+## Cached policy reevaluation (0.5.0)
+
+Saving changed audio-evaluation rules creates a durable `reevaluate` job in the
+same transaction as the preference save. Queue-full errors roll back the save,
+so a successful response cannot lose the requested work. Rapid saves replace the
+pending job's policy; a running older revision stops as **superseded** at a batch
+boundary. Cancellation/interruption preserves earlier committed batches and can
+be retried from Settings. Changing only automatic-edit/keep-language options or
+file extensions does not unnecessarily reevaluate issue flags.
+
+Settings → Cached audio policy reports current, pending, and missing-analysis
+counts for the active account. **Reevaluate cached audio** queues a manual retry
+or applies the evaluator to upgraded legacy cached tracks. Jobs records policy
+revision, counts, and outcomes. The HTTP endpoints are
+`GET /api/settings/evaluation` and `POST /api/settings/reevaluate` (202).
+
+The worker uses bounded batches of saved tracks and the existing title's anime
+classification. It does not stat/open/probe media, contact Plex, reclassify titles,
+or call editing tools—even when automatic fixing is enabled. Scan timestamps,
+raw/normalized tags, track IDs, review notes, and media files remain unchanged.
+Cached results describe the last successful analysis: a later external file
+replacement still requires a scan to discover new evidence. Anime detection and
+extension changes take effect on subsequent scans, not on cached evaluation.
+
+Migration `0010_cached_evaluation` marks existing saved tracks as usable analysis
+and leaves policy freshness pending until reevaluation. Historical empty results
+cannot safely prove that a file had no audio, so they require a new physical
+analysis; incremental scans now re-probe those records instead of skipping them.
+New successful no-audio analyses are tracked explicitly and can be reevaluated
+without another probe. A failed physical probe preserves previous analysis.
+
+For future implementation changes, increment `EVALUATION_VERSION` when evaluator
+semantics change, and `ANALYSIS_VERSION` when saved probe evidence needs refreshing.
+Evaluation revisions include the evaluator version, so existing cached results
+become visibly pending rather than silently appearing current under changed code.
+
+Back up the catalog and both keys before upgrading. Migration only changes the
+catalog, not media. Roll back with the matching pre-upgrade catalog and image;
+do not start an older app against the newer schema.
+
+## Versioned releases
+
+Normal master builds continue to publish `latest` and `sha-<commit>` only after
+all checks succeed. A reviewed release is a separate, explicit maintainer action:
+
+1. Merge the candidate and wait for the master image-publishing workflow to pass.
+2. Confirm backend `VERSION`, frontend package/lockfile, and the changelog agree.
+3. Create and push an annotated `vX.Y.Z` tag at that exact merged commit. Do not
+   tag an unmerged feature commit or move an already-published release tag.
+4. The tag workflow rechecks versions, notes, master ancestry, tests and the exact
+   already-published SHA container. It verifies the full embedded Git revision.
+5. After all gates pass, it promotes that image by digest to `X.Y.Z`, then creates
+   GitHub release notes with the image digest and revision. It does not rebuild
+   the release image or move `latest`. If a version already points to another
+   digest, publication fails; use a new patch version instead of overwriting it.
+
+Docker documents that copying a single image index with `imagetools create`
+preserves the index; the workflow checks the resulting digest as well.
+See [Docker's promotion behavior](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/)
+and [GitHub CLI release/tag checks](https://cli.github.com/manual/gh_release_create).
+Immutability is enforced by this workflow, not a claim that registry administrators
+cannot manually change tags. Restrict tag/package-write access appropriately.
+
+If a release tag is pushed before its SHA image is published, the workflow fails
+without creating a version image/release. After master publication succeeds, rerun
+the failed tag workflow. A successful rerun is idempotent when the digest matches.
+Older commits whose workflow predates this mechanism do not acquire version tags
+retroactively. Verify the release workflow before changing an installation's tag.
+
+For installation, select the published `X.Y.Z` image (or its full digest), preserve
+the existing appdata/mounts/keys, and recreate the container. Keep media writes
+disabled for initial verification. The footer and `/api/info` must show the expected
+version **and** revision. A Docker restart alone keeps the old image; an `image:`
+deployment and the repository's local `build:` Compose flow are different update
+paths. Do not delete appdata or rotate keys to resolve an image-version mismatch.
+
 ## Keys and Plex reconnection
 
 `SECRET_KEY` signs browser sessions. Changing it requires users to sign in again.

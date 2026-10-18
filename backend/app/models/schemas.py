@@ -180,6 +180,15 @@ class JobListResponse(BaseModel):
     latest_finished_at: Optional[datetime] = None
 
 
+class EvaluationStatus(BaseModel):
+    policy_revision: str
+    files_total: int
+    files_current: int
+    files_pending: int
+    files_needing_scan: int
+    latest_job: Optional[JobResponse] = None
+
+
 class ScanStatus(BaseModel):
     """Current scan status."""
 
@@ -267,6 +276,8 @@ class MediaFileResponse(BaseModel):
     issue_details: Optional[str] = None
     issues: list[IssueResponse] = Field(default_factory=list)
     issue_evaluation_version: Optional[int] = None
+    analysis_version: Optional[int] = None
+    issue_policy_revision: Optional[str] = None
     language_review_note: Optional[str] = None
     audio_tracks: list[AudioTrackResponse] = []
     edit_capabilities: Optional[MediaEditCapabilities] = None

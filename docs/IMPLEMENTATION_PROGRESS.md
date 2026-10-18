@@ -1,7 +1,7 @@
 # TrackHound implementation checkpoint
 
-Current work: 0.4.0 durable jobs (#64), building on the merged
-[0.3.0 release PR #90](https://github.com/TheSoloGreen/TrackHound/pull/90).
+Current work: 0.5.0 cached policy reevaluation (#81) and versioned release markers
+(#75), building on the merged [0.4.0 PR #91](https://github.com/TheSoloGreen/TrackHound/pull/91).
 See [CHANGELOG.md](../CHANGELOG.md) for current behavior and the
 [review roadmap #88](https://github.com/TheSoloGreen/TrackHound/issues/88) for
 remaining work. The branch-stack notes below are historical, not current merge

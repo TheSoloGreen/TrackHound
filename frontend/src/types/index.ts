@@ -42,12 +42,12 @@ export interface DirectoryBrowseResponse {
 
 export interface Job {
   id: number
-  kind: 'scan' | 'rescan_file' | 'rescan_show' | 'default_audio' | 'remove_audio'
+  kind: 'scan' | 'rescan_file' | 'rescan_show' | 'default_audio' | 'remove_audio' | 'reevaluate'
   target_file_id?: number | null
   target_show_id?: number | null
-  status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed' | 'interrupted'
+  status: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed' | 'interrupted' | 'superseded'
   progress: { files_scanned?: number; files_total?: number; current_file?: string; errors?: string[]; warnings?: string[] }
-  result: { message?: string; file_id?: number; backup_path?: string }
+  result: { message?: string; file_id?: number; backup_path?: string; reevaluated?: number; unchanged?: number; needs_scan?: number; policy_revision?: string }
   error: string | null
   cancel_requested: boolean
   created_at: string
@@ -121,6 +121,8 @@ export interface MediaFile {
   issue_details: string | null
   issues?: { code: string; severity: 'error' | 'warning'; message: string; details: Record<string, unknown> }[]
   issue_evaluation_version?: number | null
+  analysis_version?: number | null
+  issue_policy_revision?: string | null
   language_review_note?: string | null
   audio_tracks: AudioTrack[]
   edit_capabilities?: MediaEditCapabilities
@@ -179,6 +181,15 @@ export interface UserSettings {
   audio_preferences: AudioPreferences
   anime_detection: AnimeDetectionSettings
   file_extensions: string[]
+}
+
+export interface EvaluationStatus {
+  policy_revision: string
+  files_total: number
+  files_current: number
+  files_pending: number
+  files_needing_scan: number
+  latest_job: Job | null
 }
 
 // Dashboard stats

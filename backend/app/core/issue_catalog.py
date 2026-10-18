@@ -4,6 +4,7 @@ import re
 
 from app.core.preference_engine import EVALUATION_VERSION, Issue
 from app.models.entities import MediaIssue
+from app.core.policy_revision import evaluation_revision
 
 
 def apply_evaluation(media_file, engine, tracks, is_anime=False):
@@ -16,6 +17,7 @@ def apply_evaluation(media_file, engine, tracks, is_anime=False):
         records.append(record)
     media_file.issue_records = records
     media_file.issue_evaluation_version = EVALUATION_VERSION
+    media_file.issue_policy_revision = evaluation_revision(engine.preferences)
     media_file.has_issues = bool(issues)
     media_file.issue_details = "; ".join(issue.message for issue in issues) or None
     return issues
