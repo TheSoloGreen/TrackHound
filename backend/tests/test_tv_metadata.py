@@ -107,6 +107,11 @@ def test_multiple_versions_of_one_identity_are_not_ambiguous():
     assert client.find_show_by_file("/mount/Alpha/Season 01/E01.mkv").rating_key == "1"
 
 
+def test_missing_directory_evidence_cannot_be_a_relative_path_match():
+    client = connector(show(1, "Alpha", 2000, "E01.mkv"))
+    assert client.find_show_by_file("unrelated.mkv") is None
+
+
 def test_reloading_inventory_replaces_stale_aliases_and_deduplicates():
     client = connector(show(1, "Alpha", 2000))
     assert client.find_show("Alpha").rating_key == "1"

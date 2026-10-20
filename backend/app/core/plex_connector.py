@@ -348,7 +348,9 @@ class PlexConnector:
             variants = list(show.title_variants)
             for file_path in show.file_paths:
                 paths.setdefault(self._normalize_path(file_path), {})[show.rating_key] = show
-                relative_paths.setdefault(self._relative_file_key(file_path), {})[show.rating_key] = show
+                relative_key = self._relative_file_key(file_path)
+                if relative_key:
+                    relative_paths.setdefault(relative_key, {})[show.rating_key] = show
                 folder = self._extract_show_folder(file_path)
                 if folder:
                     variants.extend(self._generate_title_variants(folder))
@@ -507,6 +509,8 @@ class PlexConnector:
         for exact in (True, False):
             matches = {}
             key = self._normalize_path(file_path) if exact else self._relative_file_key(file_path)
+            if not key:
+                continue
             for episode in episodes:
                 for path in episode.file_paths or ([episode.file_path] if episode.file_path else []):
                     candidate = self._normalize_path(path) if exact else self._relative_file_key(path)
