@@ -19,7 +19,7 @@ from app.models.entities import MediaFile, Show, Season, ScanLocation, AudioTrac
 from app.core.analyzer import ANALYSIS_VERSION, AudioAnalyzer, require_successful_analysis
 from app.core.artwork import artwork_reference
 from app.core.media_access import get_media_edit_capabilities
-from app.core.plex_connector import PlexConnector
+from app.core.plex_connector import AmbiguousPlexMatch, PlexConnector
 from app.core.preference_engine import PreferenceEngine, AudioPreferences
 from app.core.audio_fixer import set_default_track_by_index
 from app.models.schemas import AnimeDetectionSettings, normalize_file_extensions
@@ -225,17 +225,22 @@ class MediaScanner:
         info = ({"show": parse_movie_title(file_path, base_path), "season": None, "episode": None}
                 if base_type == "movie" else parse_show_info(file_path, base_path))
         metadata = None
+        metadata_ambiguous = False
         if self.plex_connector:
             try:
                 lookup = self.plex_connector.sync_movie_metadata if base_type == "movie" else self.plex_connector.sync_show_metadata
                 metadata = await asyncio.to_thread(lookup, file_path=file_path, title_from_path=info["show"])
+            except AmbiguousPlexMatch as error:
+                metadata_ambiguous = True
+                await scan_state_manager.append_warning(user_id, f"{file_path}: {error}")
             except Exception as error:
                 logger.warning("Plex enrichment disabled for this scan (%s)", type(error).__name__)
                 self.plex_connector = None
                 self.plex_failed = True
                 await scan_state_manager.append_warning(user_id, "Plex metadata is unavailable. Local scanning continues; check Plex server access or sign in again before the next scan.")
 
-        return {"audio": audio, "info": info, "metadata": metadata, "stat": after, "fixed": False}
+        return {"audio": audio, "info": info, "metadata": metadata, "metadata_ambiguous": metadata_ambiguous,
+                "stat": after, "fixed": False}
 
     async def _process_file(self, file_path, base_path, media_type, user_id, db, prepared):
         existing = await db.scalar(select(MediaFile).where(MediaFile.file_path == file_path, MediaFile.user_id == user_id))
@@ -269,7 +274,7 @@ class MediaScanner:
         source = "location" if media_type == "anime" else "folder" if folder_hint else "plex_genre" if plex_hint else None
         if show and show.anime_source == "manual":
             is_anime, source, base_type = show.is_anime, "manual", show.base_media_type
-        elif show and self.plex_failed and self.anime_detection.use_plex_genres and show.anime_source == "plex_genre" and not is_anime:
+        elif show and (self.plex_failed or prepared.get("metadata_ambiguous")) and self.anime_detection.use_plex_genres and show.anime_source == "plex_genre" and not is_anime:
             is_anime, source = show.is_anime, "plex_genre"
 
         if title and not show:
@@ -286,7 +291,8 @@ class MediaScanner:
         if not prepared["fixed"]:
             # Cache the resulting probe before any retriable database persistence.
             # Never repeat a physical edit when a later flush or commit is busy.
-            audio = require_successful_analysis(await asyncio.to_thread(self._auto_fix_default_track, file_path, audio, is_anime))
+            if not prepared.get("metadata_ambiguous"):
+                audio = require_successful_analysis(await asyncio.to_thread(self._auto_fix_default_track, file_path, audio, is_anime))
             prepared.update(audio=audio, stat=await asyncio.to_thread(os.stat, file_path), fixed=True)
         after = prepared["stat"]
         season = None

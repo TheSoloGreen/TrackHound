@@ -203,3 +203,25 @@ Coverage: `test_reevaluation.py`, cached-analysis migration checks,
 `test_release.py`, `PolicyEvaluation.test.tsx`, and existing queue/audio/native
 integration regressions. Actual version-tag promotion remains an approval-gated
 release operation, not something a PR test publishes.
+
+### Plex TV identity and UI follow-up
+
+Use a disposable catalog with Plex enrichment and media writes disabled:
+
+1. Give two shows generic `Season 01/E01.mkv` names. An exact path must choose its
+   own show; an unknown show folder must not pick the first filename match.
+2. Include duplicate title aliases/remakes and identical relative paths under
+   different roots. Ambiguous identities must remain unresolved with a file-specific
+   warning in Dashboard and Jobs. A title/year may resolve unique title fallback;
+   it must not override ambiguous stronger path evidence.
+3. Rescan a known Plex-classified anime while its identity is ambiguous. Its saved
+   title/artwork/identity and applicable classification must not be replaced; other
+   files should still enrich. Automatic edits must be skipped for that file.
+4. Compare Dashboard's last scan, completed scan summary, and Jobs in a non-UTC
+   browser timezone. They must show the same completion instant.
+5. Rapidly type and paste searches into Library and Files. All characters must
+   remain; filters/page reset and browser Back/Forward must still restore URL state.
+
+Coverage: `test_tv_metadata.py`, `test_tv_identity_scan.py`, `Dates.test.tsx`, and
+`SearchInput.test.tsx`. The matching tests use synthetic Plex objects and disposable
+files; they neither access a real Plex server nor change physical media.

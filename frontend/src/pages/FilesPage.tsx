@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import LanguageReview from '../components/LanguageReview'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -32,6 +32,8 @@ export default function FilesPage() {
   const positiveInt = (value: string | null) => value && /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : undefined
   const page = positiveInt(params.get('page')) ?? 1
   const search = params.get('search') ?? ''
+  const [searchDraft, setSearchDraft] = useState(search)
+  useEffect(() => setSearchDraft(search), [search])
   const hasIssues = params.get('has_issues') === 'true' ? true : params.get('has_issues') === 'false' ? false : undefined
   const categories: IssueCategory[] = ['missing_required_audio', 'preferred_not_default', 'missing_english', 'missing_japanese', 'missing_dual_audio', 'unknown_language', 'preferred_codec']
   const issueCategory = categories.includes(params.get('issue_category') as IssueCategory) ? params.get('issue_category') as IssueCategory : undefined
@@ -284,8 +286,9 @@ export default function FilesPage() {
             type="text"
             aria-label="Search files"
             placeholder="Search files..."
-            value={search}
+            value={searchDraft}
             onChange={(e) => {
+              setSearchDraft(e.target.value)
               update({ search: e.target.value || undefined, page: undefined }, true)
             }}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"

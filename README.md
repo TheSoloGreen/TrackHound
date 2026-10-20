@@ -1,6 +1,10 @@
 # TrackHound
 
-Media audio track scanner with Plex integration. Scans your media library to identify files missing preferred audio languages and flags issues based on customizable rules.
+Media audio track scanner with optional Plex integration. Scans your media library to identify files missing preferred audio languages and flags issues based on customizable rules.
+
+Release status and scope are tracked in the [implementation checkpoint](docs/IMPLEMENTATION_PROGRESS.md).
+Features described in a candidate branch are not available in an installed container
+until that code is merged, published, and deployed; check the running `/api/info`.
 
 ## Features
 
@@ -29,7 +33,7 @@ Media audio track scanner with Plex integration. Scans your media library to ide
 
 ### Frontend
 - React 19 with TypeScript
-- Tailwind CSS + shadcn/ui
+- Tailwind CSS with project-owned React components and Lucide icons
 - TanStack Query for state management
 
 ## Quick Start
@@ -174,6 +178,24 @@ checks production container startup and health before publishing an image. Local
 test runs skip the real MKV test if ffmpeg or MKVToolNix is unavailable.
 
 ## Configuration
+
+### Trust and editing boundaries
+
+Keep the service on a trusted network, especially with authentication set to None.
+Anyone who can reach a no-login instance can use its shared catalog and settings;
+this mode is not a read-only guest view. Required-login mode scopes catalog access
+to the authenticated account and checks configured Plex access restrictions on
+requests. Logout currently clears the browser token, not that token's server-side
+validity; session revocation is tracked in [#72](https://github.com/TheSoloGreen/TrackHound/issues/72).
+
+Media analysis reads metadata, not spoken content. Unknown language tags and
+title-inferred audio roles require human review. MKV editing additionally requires
+the server write gate, native tools, and a writable in-scope path. Removal backups
+are never overwritten, but default-flag edits have no undo journal and remuxes do
+not yet have capacity preflight or full non-audio stream verification. Keep media
+writes disabled until you have backups and have tested disposable copies. See
+[#66](https://github.com/TheSoloGreen/TrackHound/issues/66) and the
+[operations guide](docs/OPERATIONS.md) for the remaining recovery limits.
 
 ### Environment Variables
 

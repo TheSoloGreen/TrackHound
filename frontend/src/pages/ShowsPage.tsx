@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Search, AlertTriangle, ChevronRight } from 'lucide-react'
@@ -36,6 +36,9 @@ export default function ShowsPage() {
 
   const page = Math.max(1, Number(searchParams.get('page') || '1'))
   const search = searchParams.get('search') || ''
+  // Keep keystrokes urgent while BrowserRouter defers query-string navigation.
+  const [searchDraft, setSearchDraft] = useState(search)
+  useEffect(() => setSearchDraft(search), [search])
   const hasIssuesParam = searchParams.get('has_issues')
   const mediaTypeParam = searchParams.get('media_type')
 
@@ -44,7 +47,7 @@ export default function ShowsPage() {
     has_issues: hasIssuesParam === null ? undefined : hasIssuesParam === 'true',
   }), [hasIssuesParam, mediaTypeParam])
 
-  const updateSearchParams = (updates: Record<string, string | undefined>) => {
+  const updateSearchParams = (updates: Record<string, string | undefined>, replace = false) => {
     const next = new URLSearchParams(searchParams)
     for (const [key, value] of Object.entries(updates)) {
       if (!value) {
@@ -53,7 +56,7 @@ export default function ShowsPage() {
         next.set(key, value)
       }
     }
-    setSearchParams(next)
+    setSearchParams(next, { replace })
   }
 
   const debouncedSearch = useDebounce(search, 300)
@@ -88,13 +91,15 @@ export default function ShowsPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
           <input
             type="text"
+            aria-label="Search library"
             placeholder="Search library..."
-            value={search}
+            value={searchDraft}
             onChange={(e) => {
+              setSearchDraft(e.target.value)
               updateSearchParams({
                 search: e.target.value || undefined,
                 page: undefined,
-              })
+              }, true)
             }}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-transparent"
           />
