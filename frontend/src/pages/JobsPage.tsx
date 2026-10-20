@@ -5,13 +5,13 @@ import { jobsApi } from '../api/client'
 import { apiError } from '../api/errors'
 import { useJobs } from '../hooks/useJobs'
 import type { Job } from '../types'
+import { formatServerDate } from '../utils/dates'
 
 const labels: Record<Job['kind'], string> = {
   scan: 'Library scan', rescan_file: 'File rescan', rescan_show: 'Title rescan',
   default_audio: 'Default audio edit', remove_audio: 'Audio track removal',
   reevaluate: 'Cached audio reevaluation',
 }
-const date = (value: string) => new Date(value.endsWith('Z') || /[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString()
 
 export default function JobsPage() {
   const [offset, setOffset] = useState(0)
@@ -28,7 +28,7 @@ export default function JobsPage() {
     {data?.items.length === 0 && <p>No jobs yet.</p>}
     {data?.items.map((job) => <section key={job.id} id={`job-${job.id}`} aria-label={`Job #${job.id}`} className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 space-y-2 break-words">
       <h2 className="font-semibold">#{job.id} · {labels[job.kind]} · {job.status.replaceAll('_', ' ')}</h2>
-      <p className="text-sm text-gray-500">Queued {date(job.created_at)}{job.finished_at && ` · Finished ${date(job.finished_at)}`}</p>
+      <p className="text-sm text-gray-500">Queued {formatServerDate(job.created_at)}{job.finished_at && ` · Finished ${formatServerDate(job.finished_at)}`}</p>
       {job.progress.files_total !== undefined && <p>{job.progress.files_scanned || 0} / {job.progress.files_total} files processed</p>}
       {job.progress.current_file && job.status === 'running' && <p>{job.progress.current_file}</p>}
       {job.result.message && <p>{job.result.message}</p>}

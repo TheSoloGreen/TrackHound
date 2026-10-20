@@ -1,4 +1,5 @@
 import type { ScanStatus } from '../types'
+import { formatServerDate } from '../utils/dates'
 
 const labels: Record<ScanStatus['outcome'], string> = {
   idle: '', running: 'Scan in progress', completed: 'Scan completed',
@@ -17,7 +18,7 @@ export default function ScanSummary({ status }: { status?: ScanStatus }) {
         </p>
         {status.is_running && <p className="text-sm break-words">{status.current_file || 'Discovering files…'}</p>}
         {!status.is_running && status.finished_at && (
-          <p className="text-sm text-gray-600 dark:text-gray-400">Finished {new Date(status.finished_at).toLocaleString()}</p>
+          <p className="text-sm text-gray-600 dark:text-gray-400">Finished {formatServerDate(status.finished_at)}</p>
         )}
       </div>
       {status.is_running && <progress aria-label="Scan progress" value={status.files_scanned} max={Math.max(status.files_total, 1)} className="w-full" />}

@@ -10,6 +10,9 @@ Cached policy reevaluation and versioned release markers (issues #81, #75):
 - Migration `0010_cached_evaluation` separates successful analysis from policy freshness. Existing cached tracks remain reusable; ambiguous historical empty analyses require a physical scan. Incremental scanning now re-probes records without current analysis.
 - Release checks validate aligned backend/frontend/lockfile versions and changelog notes. A matching `vX.Y.Z` tag on a master-reachable commit gates a stable `X.Y.Z` container tag and GitHub release behind the full checks.
 - Stable tags promote the already-published SHA image by digest, refuse to overwrite a different existing version, and leave `latest` unchanged. Normal master builds still publish `latest` and SHA tags.
+- Plex TV matching retains colliding aliases and paths, requires unique fallback candidates, and uses explicit years to distinguish remakes (#67). Ambiguity is reported in saved scan/job warnings; local analysis continues without guessed metadata or automatic media edits for the affected file.
+- Dashboard, scan summaries, and Jobs consistently interpret server timestamps as UTC. Library and Files keep rapid search input responsive while preserving URL filters and navigation.
+- Architecture, trust boundaries, scan/edit limits, and linked implementation status replace stale pre-job documentation (#73).
 
 Back up the catalog and retain both keys before upgrading. Initially keep media writes disabled. Cached audio reevaluation uses saved title classification; anime detection/extension changes still apply on subsequent scans. Roll back the image and matching pre-upgrade catalog together. See [release and upgrade operations](docs/OPERATIONS.md) and the [live test checklist](docs/REVIEW_REGRESSIONS.md).
 

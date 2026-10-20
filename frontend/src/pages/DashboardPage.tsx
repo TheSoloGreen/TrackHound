@@ -16,6 +16,7 @@ import ScanSummary from '../components/ScanSummary'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiError } from '../api/errors'
+import { formatServerDate } from '../utils/dates'
 
 function StatCard({
   icon: Icon,
@@ -298,7 +299,7 @@ export default function DashboardPage() {
       {/* Last Scan Info */}
       {stats?.last_scan && (
         <div className="text-sm text-gray-500 dark:text-gray-400 text-center">
-          Last scan: {new Date(stats.last_scan).toLocaleString()}
+          Last scan: {formatServerDate(stats.last_scan)}
         </div>
       )}
     </div>

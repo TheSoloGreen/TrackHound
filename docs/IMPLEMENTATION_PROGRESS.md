@@ -1,100 +1,101 @@
 # TrackHound implementation checkpoint
 
-Current work: 0.5.0 cached policy reevaluation (#81) and versioned release markers
-(#75), building on the merged [0.4.0 PR #91](https://github.com/TheSoloGreen/TrackHound/pull/91).
-See [CHANGELOG.md](../CHANGELOG.md) for current behavior and the
-[review roadmap #88](https://github.com/TheSoloGreen/TrackHound/issues/88) for
-remaining work. The branch-stack notes below are historical, not current merge
-or deployment instructions.
+This is a source/review checkpoint, not a declaration that a container has updated.
+The running `/api/info` and footer are authoritative for deployed version/revision.
+The [roadmap #88](https://github.com/TheSoloGreen/TrackHound/issues/88), linked PR
+checks, and [changelog](../CHANGELOG.md) track implementation and release scope.
 
-## Historical branch-stack checkpoint
+## Delivered and candidate work
 
-Review baseline: `0ce4fa81fd8adc264fbf5b78457ad097939a91e2` on `master`.
-The implementation is split into dependent review branches. Nothing has been
-merged or deployed, and no production database or media has been changed.
+- The earlier foundations shipped through PRs
+  [#42](https://github.com/TheSoloGreen/TrackHound/pull/42),
+  [#43](https://github.com/TheSoloGreen/TrackHound/pull/43),
+  [#44](https://github.com/TheSoloGreen/TrackHound/pull/44), and subsequent UI/auth
+  fixes. Their old branch-stack instructions are no longer merge instructions.
+- [PR #89](https://github.com/TheSoloGreen/TrackHound/pull/89): account-owned artwork
+  proxy without Plex credentials in browser-visible URLs, distinct movie identity,
+  conservative language normalization/inference (#58–60).
+- [0.3.0 / PR #90](https://github.com/TheSoloGreen/TrackHound/pull/90): explicit anime
+  classification, main/auxiliary roles, default-count checks, exact-track selection,
+  required-language removal protection, and structured issues (#61–63, #65).
+- [0.4.0 / PR #91](https://github.com/TheSoloGreen/TrackHound/pull/91): durable bounded
+  jobs, saved progress/outcomes, probe cancellation/deadlines, restart reporting,
+  and a single-worker catalog lock (#64).
+- [0.5.0 candidate / PR #92](https://github.com/TheSoloGreen/TrackHound/pull/92):
+  cached-only audio policy reevaluation and freshness reporting (#81), plus checked
+  version-tag/digest-preserving release tooling (#75). A prepared workflow is not
+  evidence that an actual immutable version tag has been published.
+- The `fix/plex-tv-identity` follow-up builds on that candidate: unambiguous Plex TV
+  matching and visible review warnings (#67), UTC display/rapid-search regressions,
+  and refreshed implementation/trust/operations documentation (#73). It does not
+  merge, publish, deploy, or start production work on its own.
 
-TrackHound scans mounted media with MediaInfo, stores per-user titles, seasons,
-audio tracks and preference violations in SQLite or PostgreSQL, and uses Plex
-for sign-in and optional metadata. A React interface supports browsing, exports,
-rescans, default-audio changes, and MKV track removal. FastAPI serves the built UI.
+## Runtime architecture
 
-## Review and merge order
+FastAPI serves the API and production React UI. SQLAlchemy/async sessions store
+per-account locations, titles, seasons, files, measured audio tracks, structured
+issues, notes, preferences, and jobs in SQLite or PostgreSQL. Versioned migrations
+upgrade historical schemas; rollback requires the matching pre-upgrade backup.
 
-1. [PR #42](https://github.com/TheSoloGreen/TrackHound/pull/42),
-   `fix/secure-media-editing`: authorized access, explicit media-write capability,
-   recoverable MKV edits, language removal plans, and deployment checks.
-2. [PR #43](https://github.com/TheSoloGreen/TrackHound/pull/43),
-   `fix/database-integrity`: transactional historical upgrades, database-enforced
-   ownership and cascades, per-file savepoints, and verified backup/recovery.
-3. [PR #44](https://github.com/TheSoloGreen/TrackHound/pull/44),
-   `fix/scan-correctness`: scan settings/full rescans, Plex fallback, reconciliation,
-   classification consistency, and bounded completion status.
-4. `fix/ui-consistency`: draft preference saves, production deep links, shared
-   cache refresh, persistent scan summaries, and frontend regression tests.
+MediaInfo extracts measured track metadata in an isolated child process. A shared
+evaluator applies the effective audio preferences to saved measurements. Plex is
+optional enrichment/sign-in, not a requirement for local scanning. Safe poster
+requests go through the account-owned artwork endpoint. The frontend uses React,
+React Router, TanStack Query, Tailwind CSS, and Lucide icons; components are owned
+by this repository, not shadcn/ui.
 
-Each follow-up targets the preceding branch to keep its diff focused. After its
-parent merges, retarget the next PR to `master` and check CI before merging.
-Preserve the parent commit ancestry when merging this stack; squash/rebase merges
-require updating dependent branches before proceeding. Historical branches outside
-this sequence have not been combined or removed.
+One database-backed FIFO worker executes scans, rescans, cached reevaluations, and
+individual edits. Queued work resumes; running work is interrupted after restart
+and never automatically replayed. A catalog-wide lifetime lock rejects a second
+worker. Browser cache invalidation refreshes affected library views after jobs
+finish. See [scan behavior](SCANNING.md) for exact matching, reconciliation,
+retention, cancellation, and deadline limits.
 
-## Existing issue coverage
+## Trust and media safety
 
-| Issue | Implemented behavior | Review branch |
-| --- | --- | --- |
-| #26 | Valid Compose environment mappings; missing-key and render checks | secure-media-editing + database-integrity |
-| #27 | Transactional, versioned upgrades from actual historical schemas on SQLite/PostgreSQL | database-integrity |
-| #28 | Native MKV tools, opt-in writes, capability responses, backup/restore protection | secure-media-editing |
-| #29 | Full scans reanalyze unchanged files; dashboard exposes a Full scan option | scan-correctness + ui-consistency |
-| #30 | Saved extension and anime detection settings applied with documented precedence | scan-correctness |
-| #31 | Missing-record cleanup only after a complete uncancelled scan; user/root isolation | scan-correctness |
-| #32 | Plex timeout/auth/no-server failures fall back to local analysis with one warning | scan-correctness |
-| #33 | Per-user path uniqueness; a failed file does not poison the scan session | database-integrity |
-| #34 | Immediate local drafts, explicit serialized saves, response cache updates, retained later edits/errors | ui-consistency |
-| #35 | Saved keep-language plans, explicit overrides, exact confirmation and stale-revision rejection | secure-media-editing + ui-consistency tests |
-| #36 | SPA fallback for client routes; API and missing-asset behavior retained | ui-consistency |
-| #37 | Canonical anime category with manual precedence, restored movie/TV origin, refreshed issues/badges/stats | scan-correctness + ui-consistency |
-| #38 | Completion refreshes all library caches; persistent outcomes and bounded expandable messages | scan-correctness + ui-consistency |
-| #39 | Foreign keys on every SQLite connection, orphan cleanup, tested database cascades | database-integrity |
-| #40 | Plex account allowlist enforced on login and authenticated APIs; exposure guidance | secure-media-editing + database-integrity docs |
-| #41 | Consistent SQLite and PostgreSQL backups, rollback instructions, recovery integration tests | database-integrity |
+Authentication defaults to None, which grants shared-account catalog/settings
+access to anyone able to reach the instance. Restrict network exposure or enable
+Require login before exposing it to untrusted clients. Required-login APIs enforce
+account ownership, credential-version changes, and configured Plex admission
+rules. Browser logout is not yet scoped server-side revocation (#72).
 
-Issues remain open until the corresponding implementation is merged into the
-repository's default branch. Consult PR checks for the latest remote results.
+Production requires strong signing/encryption keys. Retain the encryption key
+with catalog backups; do not rotate it as an upgrade workaround. Native edits also
+require the explicit server write gate, tools, and writable in-scope MKV paths.
+Removal plans protect required/unknown languages; reviewed overrides and stale
+selection/policy checks must not be bypassed.
 
-## Validation
+MediaInfo does not identify spoken language. Unknown tags and title-based roles
+are review hints. Remux backups are never overwritten, but full edit journaling,
+capacity preflight, and verification of every non-audio stream remain #66. Test
+physical edits and restart recovery only on disposable copies, not production
+originals. [Operations](OPERATIONS.md) covers backup/upgrade/rollback and release
+approval; [regression checks](REVIEW_REGRESSIONS.md) distinguish automated tests
+from approval-gated live writes.
 
-- PR #42 CI: 81 backend tests, real generated MKV editing, frontend build, both
-  Compose files, production startup/health and native-tool checks passed.
-- PR #43 CI: 98 backend tests passed, including historical PostgreSQL upgrades and
-  backup/upgrade/restore. Frontend and container checks also passed.
-- PR #44 local: 118 passed; 11 PostgreSQL/native-tool cases require CI.
-- Final UI branch local: 136 backend tests passed, 11 integration cases require
-  CI; 12 frontend regression tests and the TypeScript/production build passed.
-- CI installs the native tools and PostgreSQL service, runs frontend tests, builds
-  and smoke-tests the production container. Draft PRs do not publish images.
+## Next dependencies
 
-Commands: `cd backend && python -m pytest -q`;
-`cd frontend && npm ci && npm test && npm run build`.
+- [#66](https://github.com/TheSoloGreen/TrackHound/issues/66): edit journal/recovery
+  before batch writes (#79) or embedded tag correction (#83).
+- [#68](https://github.com/TheSoloGreen/TrackHound/issues/68) and
+  [#82](https://github.com/TheSoloGreen/TrackHound/issues/82): episode ranges and
+  explicit Plex server/library/path mappings; not delivered by #67's ambiguity fix.
+- [#76](https://github.com/TheSoloGreen/TrackHound/issues/76) and
+  [#77](https://github.com/TheSoloGreen/TrackHound/issues/77): per-title/location
+  profiles and subtitle inventory/evaluation, not part of cached audio refresh.
+- [#78](https://github.com/TheSoloGreen/TrackHound/issues/78),
+  [#80](https://github.com/TheSoloGreen/TrackHound/issues/80), and
+  [#85](https://github.com/TheSoloGreen/TrackHound/issues/85): per-file history,
+  scheduling/notifications, and managed diagnostics/backups beyond durable jobs.
 
-## Before upgrading
+## Validation workflow
 
-Follow [OPERATIONS.md](OPERATIONS.md): back up the database with its matching
-`ENCRYPTION_KEY`; retain valid keys; configure `ALLOWED_PLEX_USER_IDS`. On a fresh
-database, a blank allowlist securely claims the first verified Plex account and
-then permits only that stored owner; a non-empty allowlist remains authoritative.
-Editing stays disabled until explicitly enabled with writable media permissions.
-Schema rollback requires a matching backup and app version, rather than an unsafe
-destructive downgrade.
+Run `python -m pytest -q` from `backend`, then `npm test` and `npm run build` from
+`frontend`. Linux CI additionally supplies PostgreSQL, ffmpeg, MediaInfo, and
+MKVToolNix, exercises historical migrations and real disposable MKV edits, checks
+version/changelog alignment, and smoke-tests production container/Compose startup.
+Use the latest PR checks rather than historical test counts as release evidence.
 
-See [SCANNING.md](SCANNING.md) for exact detection, overlap, missing-file and
-cancellation rules. In Settings, edit preferences locally and choose **Save
-preferences**. Inputs remain editable during a save; newer changes need another
-save after the first finishes. Run a **Full scan** to apply new scan preferences
-to unchanged files. Location actions save individually.
-
-Continue to use one worker/container per media library. Restart-resumable jobs,
-shared multi-worker edit locks, and controlled encryption-key rotation remain
-future improvements; they are outside the acceptance criteria of issues #26–41.
-The latest scan summary survives navigation and completion, but resets on the
-next scan or application restart.
+Keep dependent changes separately reviewable. Merge/publish/deploy only after
+review and successful checks; a source change or completed test does not itself
+authorize changing a live library, enabling media writes, or promoting a release.

@@ -1,7 +1,6 @@
 """Plex Media Server connector for metadata retrieval."""
 
 import logging
-import os
 import re
 from functools import lru_cache
 from threading import Lock
@@ -50,6 +49,27 @@ class PlexEpisode:
     season_number: int
     episode_number: int
     file_path: Optional[str]
+    file_paths: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PlexShowMatch:
+    show: Optional[PlexShow] = None
+    strategy: str = "unmatched"
+    candidate_count: int = 0
+
+    @property
+    def ambiguous(self) -> bool:
+        return self.candidate_count > 1
+
+
+class AmbiguousPlexMatch(RuntimeError):
+    """A reviewable identity conflict, not a failed Plex connection."""
+
+    def __init__(self, match: PlexShowMatch):
+        super().__init__(f"Ambiguous Plex TV {match.strategy} match ({match.candidate_count} titles). "
+                         "Plex metadata was not applied; review the title and library paths. "
+                         "Automatic media editing was skipped for this file.")
 
 
 class PlexConnector:
@@ -72,8 +92,10 @@ class PlexConnector:
         self._server = None
         self._connection_lock = Lock()
         self._library_loaded = False
-        self._shows_cache: dict[str, PlexShow] = {}  # title variant -> show
-        self._file_path_cache: dict[str, PlexShow] = {}  # normalized path -> show
+        # Every index retains collisions instead of silently choosing the last item.
+        self._shows_cache: dict[str, dict[str, PlexShow]] = {}
+        self._file_path_cache: dict[str, dict[str, PlexShow]] = {}
+        self._relative_path_cache: dict[tuple[str, ...], dict[str, PlexShow]] = {}
         self._shows_by_key: dict[str, PlexShow] = {}  # rating_key -> show
         self._movies: Optional[list[PlexShow]] = None
 
@@ -187,24 +209,33 @@ class PlexConnector:
         return path.lower().replace('\\', '/')
 
     def _extract_show_folder(self, file_path: str) -> Optional[str]:
-        """Extract the show folder name from a file path."""
-        # Normalize path
-        path = file_path.replace('\\', '/')
-        parts = path.split('/')
-        
-        # Look for common patterns:
-        # /media/anime/Show Name/Season 01/episode.mkv
-        # /media/tv/Show Name/S01E01.mkv
-        for i, part in enumerate(parts):
-            if part.lower().startswith('season') or re.match(r's\d+e\d+', part.lower()):
-                if i > 0:
-                    return parts[i - 1]
-        
-        # Fallback: return parent of parent directory
-        if len(parts) >= 3:
-            return parts[-3]
-        
-        return None
+        """Use directory components, never an episode filename, as title evidence."""
+        parts = file_path.replace('\\', '/').rstrip('/').split('/')
+        if len(parts) < 2:
+            return None
+        if self._is_season_folder(parts[-2]):
+            return parts[-3] if len(parts) >= 3 else None
+        return parts[-2] or None
+
+    @staticmethod
+    def _is_season_folder(value: str) -> bool:
+        return bool(re.fullmatch(r"(?:season[\s._-]*\d+|s\d+|specials)", value, re.IGNORECASE))
+
+    def _relative_file_key(self, file_path: str) -> tuple[str, ...]:
+        parts = self._normalize_path(file_path).rstrip('/').split('/')
+        # A season plus a generic filename is not sufficient show identity.
+        count = 3 if len(parts) >= 2 and self._is_season_folder(parts[-2]) else 2
+        return tuple(parts[-count:]) if len(parts) >= count else ()
+
+    @staticmethod
+    def _title_key(title: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", title.casefold())).strip()
+
+    @staticmethod
+    def _unique_match(candidates, strategy: str) -> PlexShowMatch:
+        by_key = {show.rating_key: show for show in candidates}
+        return PlexShowMatch(next(iter(by_key.values())) if len(by_key) == 1 else None,
+                             strategy, len(by_key))
 
     def _generate_title_variants(self, title: str, original_title: Optional[str] = None) -> list[str]:
         """Generate all possible title variants for matching."""
@@ -292,8 +323,10 @@ class PlexConnector:
                                 for part in media.parts:
                                     if part.file:
                                         file_paths.append(part.file)
-                except Exception as e:
-                    logger.warning("Failed to get episodes for show '%s': %s", title, e)
+                except Exception:
+                    # A partial inventory cannot establish uniqueness. The scanner
+                    # reports unavailable enrichment and continues with local data.
+                    raise RuntimeError("Plex TV episode inventory is unavailable") from None
                 
                 plex_show = PlexShow(
                     rating_key=str(show.ratingKey),
@@ -308,22 +341,24 @@ class PlexConnector:
                 )
                 shows.append(plex_show)
                 
-                # Cache by rating key
-                self._shows_by_key[plex_show.rating_key] = plex_show
-                
-                # Cache all title variants
-                for variant in title_variants:
-                    self._shows_cache[variant] = plex_show
-                
-                # Cache file paths for quick lookup
-                for fp in file_paths:
-                    normalized = self._normalize_path(fp)
-                    self._file_path_cache[normalized] = plex_show
-                    
-                    # Also cache the show folder name
-                    folder = self._extract_show_folder(fp)
-                    if folder:
-                        self._shows_cache[folder.lower()] = plex_show
+        # Publish a complete replacement only after inventory succeeds. This also
+        # prevents a filtered/repeated library load from leaving stale aliases.
+        titles, paths, relative_paths = {}, {}, {}
+        for show in shows:
+            variants = list(show.title_variants)
+            for file_path in show.file_paths:
+                paths.setdefault(self._normalize_path(file_path), {})[show.rating_key] = show
+                relative_paths.setdefault(self._relative_file_key(file_path), {})[show.rating_key] = show
+                folder = self._extract_show_folder(file_path)
+                if folder:
+                    variants.extend(self._generate_title_variants(folder))
+            for variant in variants:
+                key = self._title_key(variant)
+                if key:
+                    titles.setdefault(key, {})[show.rating_key] = show
+        self._shows_cache, self._file_path_cache = titles, paths
+        self._relative_path_cache = relative_paths
+        self._shows_by_key = {show.rating_key: show for show in shows}
         
         self._library_loaded = library_name is None
         return shows
@@ -333,99 +368,60 @@ class PlexConnector:
         return bool(self.anime_genres & {genre.strip().casefold() for genre in genres})
 
     def find_show_by_file(self, file_path: str) -> Optional[PlexShow]:
-        """
-        Find a show by matching the file path.
-        
-        This is the most reliable matching method.
-        """
-        # Ensure cache is populated
+        """Return only an unambiguous exact or relative show/season/file match."""
+        return self._match_show_file(file_path).show
+
+    def _match_show_file(self, file_path: str) -> PlexShowMatch:
         if not self._library_loaded:
             self.get_tv_shows()
-        
         normalized = self._normalize_path(file_path)
-        
-        # Try exact match first
         if normalized in self._file_path_cache:
-            return self._file_path_cache[normalized]
-        
-        # Try matching by parent directories
-        # This handles cases where container paths differ from Plex paths
-        filename = os.path.basename(file_path).lower()
-        
-        for cached_path, show in self._file_path_cache.items():
-            if os.path.basename(cached_path).lower() == filename:
-                # Same filename - check if parent folder matches too
-                cached_parent = os.path.basename(os.path.dirname(cached_path)).lower()
-                file_parent = os.path.basename(os.path.dirname(file_path)).lower()
-                if cached_parent == file_parent:
-                    return show
-        
-        return None
+            return self._unique_match(self._file_path_cache[normalized].values(), "exact path")
+        candidates = self._relative_path_cache.get(self._relative_file_key(file_path), {})
+        return self._unique_match(candidates.values(), "relative path")
 
     def find_show(self, title: str) -> Optional[PlexShow]:
-        """
-        Find a show by title, checking all title variants.
-        
-        Tries: exact match, original title match, fuzzy match.
-        """
-        # Ensure cache is populated
+        """Resolve title aliases/year or a single plausible fuzzy candidate."""
+        match = self._match_show_title(title)
+        if not match.candidate_count:
+            match = self._match_show_title(title, fuzzy=True)
+        return match.show
+
+    def _match_show_title(self, title: str, *, fuzzy=False) -> PlexShowMatch:
         if not self._library_loaded:
             self.get_tv_shows()
-        
-        title_lower = title.lower().strip()
-        
-        # Try exact match against all cached variants
-        if title_lower in self._shows_cache:
-            return self._shows_cache[title_lower]
-        
-        # Try normalized version
-        normalized = re.sub(r'[^\w\s]', '', title_lower).strip()
-        if normalized in self._shows_cache:
-            return self._shows_cache[normalized]
-        
-        # Try fuzzy match
-        best_match = None
-        best_score = 0
-        
-        for cached_title, show in self._shows_cache.items():
-            score = self._similarity(title_lower, cached_title)
-            if score > best_score and score > 0.75:  # 75% threshold
-                best_score = score
-                best_match = show
-        
-        return best_match
+        year_match = re.fullmatch(r"(.*?)\s*(?:\((\d{4})\)|\[(\d{4})\])", title.strip())
+        name, year = (year_match[1], int(year_match[2] or year_match[3])) if year_match else (title, None)
+        key = self._title_key(name)
+        if not key:
+            return PlexShowMatch()
+        candidates = []
+        variants = self._shows_cache.items() if fuzzy else [(key, self._shows_cache.get(key, {}))]
+        for variant, shows in variants:
+            if not fuzzy or self._similarity(key, variant) > 0.75:
+                candidates.extend(show for show in shows.values() if year is None or show.year == year)
+        return self._unique_match(candidates, "fuzzy title" if fuzzy else "title/year" if year else "title")
 
     def find_show_by_path_or_title(
         self,
         file_path: str,
         title_from_path: Optional[str] = None,
     ) -> Optional[PlexShow]:
-        """
-        Find a show using multiple strategies in order of reliability:
-        1. Direct file path match
-        2. Folder name from file path
-        3. Title extracted from path
-        4. Fuzzy title match
-        """
-        # Strategy 1: Direct file path match (most reliable)
-        show = self.find_show_by_file(file_path)
-        if show:
-            return show
-        
-        # Strategy 2: Match by folder name from file path
-        folder_name = self._extract_show_folder(file_path)
-        if folder_name:
-            show = self.find_show(folder_name)
-            if show:
-                return show
-        
-        # Strategy 3: Use provided title from path parsing
-        if title_from_path:
-            show = self.find_show(title_from_path)
-            if show:
-                return show
-        
-        return None
+        return self.match_show(file_path, title_from_path).show
+
+    def match_show(self, file_path: str, title_from_path: Optional[str] = None) -> PlexShowMatch:
+        """Do not downgrade ambiguous stronger evidence to a weaker guess."""
+        match = self._match_show_file(file_path)
+        if match.candidate_count:
+            return match
+        hints = list(dict.fromkeys(filter(None, [self._extract_show_folder(file_path), title_from_path])))
+        # Exact aliases from either hint precede all fuzzy matching.
+        for fuzzy in (False, True):
+            for title in hints:
+                match = self._match_show_title(title, fuzzy=fuzzy)
+                if match.candidate_count:
+                    return match
+        return PlexShowMatch()
 
     def _similarity(self, s1: str, s2: str) -> float:
         """Calculate similarity between two strings using multiple methods."""
@@ -475,18 +471,16 @@ class PlexConnector:
             show = server.fetchItem(int(rating_key))
             
             for episode in show.episodes():
-                file_path = None
-                if episode.media:
-                    first_media = episode.media[0]
-                    if hasattr(first_media, 'parts') and first_media.parts:
-                        file_path = first_media.parts[0].file
+                paths = [part.file for media in (getattr(episode, "media", None) or [])
+                         for part in media.parts if part.file]
                 
                 episodes.append(PlexEpisode(
                     rating_key=str(episode.ratingKey),
                     title=episode.title,
                     season_number=episode.seasonNumber,
                     episode_number=episode.episodeNumber,
-                    file_path=file_path,
+                    file_path=paths[0] if paths else None,
+                    file_paths=paths,
                 ))
         except Exception as e:
             logger.warning("Failed to get episodes for rating_key '%s': %s", rating_key, e)
@@ -510,22 +504,16 @@ class PlexConnector:
         
         episodes = self.get_show_episodes(show.rating_key)
         
-        # Try exact path match
-        normalized_path = self._normalize_path(file_path)
-        for ep in episodes:
-            if ep.file_path:
-                if self._normalize_path(ep.file_path) == normalized_path:
-                    return ep
-        
-        # Try filename match
-        filename = os.path.basename(file_path).lower()
-        
-        for ep in episodes:
-            if ep.file_path:
-                ep_filename = os.path.basename(ep.file_path).lower()
-                if ep_filename == filename:
-                    return ep
-        
+        for exact in (True, False):
+            matches = {}
+            key = self._normalize_path(file_path) if exact else self._relative_file_key(file_path)
+            for episode in episodes:
+                for path in episode.file_paths or ([episode.file_path] if episode.file_path else []):
+                    candidate = self._normalize_path(path) if exact else self._relative_file_key(path)
+                    if candidate == key:
+                        matches[episode.rating_key] = episode
+            if matches:
+                return next(iter(matches.values())) if len(matches) == 1 else None
         return None
 
     def sync_show_metadata(
@@ -540,7 +528,10 @@ class PlexConnector:
         
         Returns dict with show info and whether it's anime.
         """
-        plex_show = self.find_show_by_path_or_title(file_path, title_from_path)
+        match = self.match_show(file_path, title_from_path)
+        if match.ambiguous:
+            raise AmbiguousPlexMatch(match)
+        plex_show = match.show
         
         if not plex_show:
             return None
@@ -565,7 +556,8 @@ class PlexConnector:
             self.get_tv_shows()
         
         mappings = {}
-        for variant, show in self._shows_cache.items():
-            mappings[variant] = show.title
+        for variant, shows in self._shows_cache.items():
+            if len(shows) == 1:
+                mappings[variant] = next(iter(shows.values())).title
         
         return mappings
