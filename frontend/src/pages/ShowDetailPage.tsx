@@ -5,6 +5,8 @@ import { mediaApi } from '../api/client'
 import { refreshLibrary } from '../api/cache'
 import type { ShowDetail, SeasonDetail, MediaFile, MediaType } from '../types'
 import { useState } from 'react'
+import { isAxiosError } from 'axios'
+import { apiError } from '../api/errors'
 
 const MEDIA_TYPE_BADGE: Record<MediaType, { label: string; classes: string }> = {
   movie: {
@@ -31,6 +33,10 @@ function classificationReason(show: ShowDetail): string {
     folder: 'Classified as anime by a configured folder keyword.',
     plex_genre: 'Classified as anime by a configured Plex genre.',
   } as Record<string, string>)[show.anime_source ?? ''] ?? 'Anime classification source is unknown; review this title.'
+}
+
+function isNotFound(error: unknown): boolean {
+  return isAxiosError(error) && error.response?.status === 404
 }
 
 function FileRow({
@@ -110,7 +116,7 @@ export default function ShowDetailPage() {
 
   const showId = Number(id)
 
-  const { data: show, isLoading } = useQuery<ShowDetail>({
+  const { data: show, isLoading, error: showError, refetch: refetchShow } = useQuery<ShowDetail>({
     queryKey: ['show', id],
     queryFn: async () => {
       const response = await mediaApi.getShow(showId)
@@ -119,7 +125,7 @@ export default function ShowDetailPage() {
     enabled: !isNaN(showId),
   })
 
-  const { data: seasonDetail, isLoading: seasonLoading } = useQuery<SeasonDetail>({
+  const { data: seasonDetail, isLoading: seasonLoading, error: seasonError, refetch: refetchSeason } = useQuery<SeasonDetail>({
     queryKey: ['season', id, selectedSeason],
     queryFn: async () => {
       const response = await mediaApi.getSeason(showId, selectedSeason!)
@@ -136,8 +142,8 @@ export default function ShowDetailPage() {
       setRescanError(null)
       return refreshLibrary(queryClient)
     },
-    onError: () => {
-      setRescanError('Failed to rescan file. Please confirm the file still exists and try again.')
+    onError: (error) => {
+      setRescanError(apiError(error, 'Failed to rescan file. Please confirm the file still exists and try again.'))
       void refreshLibrary(queryClient)
     },
   })
@@ -151,8 +157,8 @@ export default function ShowDetailPage() {
       setRescanError(null)
       return refreshLibrary(queryClient)
     },
-    onError: () => {
-      setRescanError('Failed to rescan series. Please confirm files still exist and try again.')
+    onError: (error) => {
+      setRescanError(apiError(error, 'Failed to rescan series. Please confirm files still exist and try again.'))
       void refreshLibrary(queryClient)
     },
   })
@@ -175,7 +181,17 @@ export default function ShowDetailPage() {
     )
   }
 
-  if (!show) {
+  if (showError && !isNotFound(showError)) {
+    return (
+      <div role="alert" className="text-center py-12">
+        <p className="text-red-700 dark:text-red-400">{apiError(showError, 'Failed to load title. Please try again.')}</p>
+        <button onClick={() => void refetchShow()} className="text-orange-500 hover:underline mt-2">Retry title</button>
+        <div><Link to={libraryLink} aria-label="Back to library" className="text-orange-500 hover:underline mt-2 inline-block">Back to library</Link></div>
+      </div>
+    )
+  }
+
+  if (!show || isNotFound(showError)) {
     return (
       <div className="text-center py-12">
         <p className="text-gray-500">Title not found</p>
@@ -327,6 +343,15 @@ export default function ShowDetailPage() {
             {seasonLoading ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-orange-500"></div>
+              </div>
+            ) : seasonError ? (
+              <div role="alert" className="text-center py-8">
+                <p className="text-red-700 dark:text-red-400">
+                  {isNotFound(seasonError) ? 'Season not found' : apiError(seasonError, 'Failed to load season. Please try again.')}
+                </p>
+                {!isNotFound(seasonError) && (
+                  <button onClick={() => void refetchSeason()} className="text-orange-500 hover:underline mt-2">Retry season</button>
+                )}
               </div>
             ) : seasonDetail ? (
               <div className="space-y-3 max-h-[500px] overflow-y-auto">

@@ -64,7 +64,13 @@ export default function DashboardPage() {
     },
   })
 
-  const { data: scanStatus } = useScanStatus()
+  const {
+    data: scanStatus,
+    isLoading: scanStatusLoading,
+    isFetching: scanStatusFetching,
+    error: scanStatusError,
+    refetch: refetchScanStatus,
+  } = useScanStatus()
   const [incremental, setIncremental] = useState(true)
 
   const startScan = useMutation({
@@ -104,6 +110,7 @@ export default function DashboardPage() {
   })
 
   const isScanning = scanStatus?.is_running
+  const scanStatusKnown = !!scanStatus && !scanStatusError && !scanStatusFetching
   const issueRows = [
     ['No English tag', 'missing_english'], ['No Japanese tag', 'missing_japanese'],
     ['Missing dual audio', 'missing_dual_audio'], ['Default audio issues', 'preferred_not_default'],
@@ -134,7 +141,7 @@ export default function DashboardPage() {
           {isScanning ? (
             <button
               onClick={() => cancelScan.mutate()}
-              disabled={cancelScan.isPending}
+              disabled={cancelScan.isPending || !scanStatusKnown}
               className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg transition-colors"
             >
               <Square className="w-4 h-4" />
@@ -143,7 +150,7 @@ export default function DashboardPage() {
           ) : (
             <button
               onClick={() => startScan.mutate()}
-              disabled={startScan.isPending}
+              disabled={startScan.isPending || !scanStatusKnown}
               className="flex items-center gap-2 px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-lg transition-colors"
             >
               <Play className="w-4 h-4" />
@@ -154,6 +161,20 @@ export default function DashboardPage() {
       </div>
 
       <ScanSummary status={scanStatus} />
+
+      {scanStatusLoading && !scanStatus && (
+        <p role="status" className="text-sm text-gray-500 dark:text-gray-400">Loading scan status…</p>
+      )}
+      {scanStatusError && (
+        <div role="alert" className="p-4 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-700 dark:text-red-400">
+            {apiError(scanStatusError, 'Failed to load scan status. Please try again.')}
+          </p>
+          <button onClick={() => void refetchScanStatus()} disabled={scanStatusFetching} className="text-sm text-orange-700 dark:text-orange-400 underline disabled:opacity-50 mt-2">
+            Retry scan status
+          </button>
+        </div>
+      )}
 
       {/* Error message */}
       {statsError && (

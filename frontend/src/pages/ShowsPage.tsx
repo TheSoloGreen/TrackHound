@@ -34,14 +34,15 @@ export default function ShowsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
 
-  const page = Math.max(1, Number(searchParams.get('page') || '1'))
+  const pageParam = searchParams.get('page')
+  const page = pageParam && /^\d+$/.test(pageParam) && Number.isSafeInteger(Number(pageParam)) && Number(pageParam) > 0 ? Number(pageParam) : 1
   const search = searchParams.get('search') || ''
   const hasIssuesParam = searchParams.get('has_issues')
   const mediaTypeParam = searchParams.get('media_type')
 
   const filters = useMemo(() => ({
-    media_type: mediaTypeParam || undefined,
-    has_issues: hasIssuesParam === null ? undefined : hasIssuesParam === 'true',
+    media_type: ['tv', 'movie', 'anime'].includes(mediaTypeParam || '') ? mediaTypeParam as MediaType : undefined,
+    has_issues: hasIssuesParam === 'true' ? true : hasIssuesParam === 'false' ? false : undefined,
   }), [hasIssuesParam, mediaTypeParam])
 
   const updateSearchParams = (updates: Record<string, string | undefined>) => {

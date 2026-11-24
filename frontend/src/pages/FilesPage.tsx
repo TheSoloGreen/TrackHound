@@ -174,8 +174,8 @@ export default function FilesPage() {
       setExpandedFile(null)
       setPage(1)
       await refreshMedia()
-    } catch {
-      setActionError('Failed to reset scanned files. Please try again.')
+    } catch (error) {
+      setActionError(apiError(error, 'Failed to reset scanned files. Please try again.'))
     } finally {
       setIsResetting(false)
     }
