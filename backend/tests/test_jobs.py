@@ -431,3 +431,170 @@ async def test_shutdown_cancellation_does_not_abandon_a_running_write(queue, mon
     async with queue.sessions() as db:
         assert (await db.get(Job, job.id)).status == "completed"
     assert queue.manager.task is None
+
+
+@pytest.mark.asyncio
+async def test_scan_rejects_cancellation_after_reconciliation_cutover(queue, monkeypatch):
+    await enqueue_scan(queue)
+    await execute_next(queue)
+    queue.source.unlink()
+    entered, release = asyncio.Event(), asyncio.Event()
+    reconcile = scanner._reconcile_missing_files
+
+    async def paused_reconcile(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await reconcile(*args, **kwargs)
+
+    monkeypatch.setattr(scanner, "_reconcile_missing_files", paused_reconcile)
+    started = await enqueue_scan(queue)
+    assert await queue.manager.claim() == started.job_id
+    execution = asyncio.create_task(queue.manager.execute(started.job_id))
+    await asyncio.wait_for(entered.wait(), 3)
+    cancellation = asyncio.create_task(queue.client.post(f"/api/jobs/{started.job_id}/cancel"))
+    try:
+        await asyncio.sleep(0.05)
+        resolved_before_cutover = cancellation.done()
+    finally:
+        release.set()
+    response = await asyncio.wait_for(cancellation, 3)
+    await asyncio.wait_for(execution, 3)
+    assert not resolved_before_cutover
+    assert response.status_code == 409
+    async with queue.sessions() as db:
+        assert await db.scalar(select(func.count(MediaFile.id))) == 0
+        assert (await db.get(Job, started.job_id)).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_scan_rejects_cancellation_after_reconciliation_cutover(queue, monkeypatch):
+    await enqueue_scan(queue)
+    await execute_next(queue)
+    queue.source.unlink()
+    entered, release = asyncio.Event(), asyncio.Event()
+    reconcile = scanner._reconcile_missing_files
+
+    async def paused_reconcile(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await reconcile(*args, **kwargs)
+
+    monkeypatch.setattr(scanner, "_reconcile_missing_files", paused_reconcile)
+    await scan_state_manager.start_scan(queue.user.id)
+    execution = asyncio.create_task(scanner.run_scan(
+        [queue.location.path], {queue.location.path: queue.location.media_type}, queue.user.id))
+    await asyncio.wait_for(entered.wait(), 3)
+    cancellation = asyncio.create_task(scan_state_manager.cancel_scan(queue.user.id))
+    await asyncio.sleep(0.05)
+    resolved_before_cutover = cancellation.done()
+    release.set()
+    result = await asyncio.wait_for(cancellation, 3)
+    await asyncio.wait_for(execution, 3)
+    assert not resolved_before_cutover
+    assert result is None
+    async with queue.sessions() as db:
+        assert await db.scalar(select(func.count(MediaFile.id))) == 0
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_cancel_scan_after_reconciliation_cutover(queue, monkeypatch):
+    await enqueue_scan(queue)
+    await execute_next(queue)
+    queue.source.unlink()
+    entered, release = asyncio.Event(), asyncio.Event()
+    reconcile = scanner._reconcile_missing_files
+
+    async def paused_reconcile(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await reconcile(*args, **kwargs)
+
+    monkeypatch.setattr(scanner, "_reconcile_missing_files", paused_reconcile)
+    started = await enqueue_scan(queue)
+    assert await queue.manager.claim() == started.job_id
+    queue.manager.task = asyncio.create_task(queue.manager.execute(started.job_id))
+    await asyncio.wait_for(entered.wait(), 3)
+    stopping = asyncio.create_task(queue.manager.stop())
+    await asyncio.sleep(0.05)
+    stopped_before_cutover = stopping.done()
+    release.set()
+    await asyncio.wait_for(stopping, 3)
+    assert not stopped_before_cutover
+    async with queue.sessions() as db:
+        assert await db.scalar(select(func.count(MediaFile.id))) == 0
+        assert (await db.get(Job, started.job_id)).status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_returns_claimed_job_to_queue_before_operation_handoff(queue, monkeypatch):
+    async with queue.sessions() as db:
+        started = await queue.manager.enqueue(
+            db, queue.user.id, "default_audio", {"file_id": 999, "request": {"track_index": 0}})
+    claimed, release = asyncio.Event(), asyncio.Event()
+    execute = queue.manager.execute
+    operation = AsyncMock()
+    monkeypatch.setattr(queue.manager, "execute_media", operation)
+
+    async def paused_handoff(job_id):
+        claimed.set()
+        await release.wait()
+        return await execute(job_id)
+
+    monkeypatch.setattr(queue.manager, "execute", paused_handoff)
+    queue.manager.task = asyncio.create_task(queue.manager.run())
+    await asyncio.wait_for(claimed.wait(), 3)
+    stop = asyncio.create_task(queue.manager.stop())
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.wait_for(stop, 3)
+    operation.assert_not_awaited()
+    async with queue.sessions() as db:
+        row = await db.get(Job, started.id)
+        assert row.status == "queued"
+        assert row.started_at is None
+
+
+@pytest.mark.asyncio
+async def test_terminal_outcome_wins_over_racing_cancellation_response(queue, monkeypatch):
+    started = await enqueue_scan(queue)
+    assert await queue.manager.claim() == started.job_id
+    entered, release = asyncio.Event(), asyncio.Event()
+    prune = queue.manager.prune_history
+
+    async def paused_prune(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await prune(*args, **kwargs)
+
+    monkeypatch.setattr(queue.manager, "prune_history", paused_prune)
+    execution = asyncio.create_task(queue.manager.execute(started.job_id))
+    await asyncio.wait_for(entered.wait(), 3)
+    cancellation = asyncio.create_task(queue.client.post(f"/api/jobs/{started.job_id}/cancel"))
+    try:
+        await asyncio.sleep(0.05)
+        resolved_before_outcome = cancellation.done()
+    finally:
+        release.set()
+    response = await asyncio.wait_for(cancellation, 3)
+    await asyncio.wait_for(execution, 3)
+    assert not resolved_before_outcome
+    assert response.status_code == 409
+    assert (await queue.client.get(f"/api/jobs/{started.job_id}")).json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_recovery_prunes_history_for_users_with_interrupted_jobs(queue):
+    async with queue.sessions() as db:
+        db.add_all([Job(user_id=queue.user.id, kind="rescan_file", status="completed",
+                        finished_at=datetime(2026, 1, 1), payload={}) for _ in range(jobs.HISTORY_LIMIT + 5)])
+        db.add(Job(user_id=queue.user.id, kind="rescan_file", status="running",
+                   active_key=f"file:{queue.user.id}:999", payload={"file_id": 999}))
+        db.add(Job(user_id=queue.other.id, kind="rescan_file", payload={"file_id": 123}))
+        await db.commit()
+    await queue.manager.recover()
+    async with queue.sessions() as db:
+        assert await db.scalar(select(func.count(Job.id)).where(Job.user_id == queue.user.id)) == jobs.HISTORY_LIMIT
+        assert await db.scalar(select(func.count(Job.id)).where(
+            Job.user_id == queue.user.id, Job.status == "interrupted")) == 1
+        assert await db.scalar(select(func.count(Job.id)).where(
+            Job.user_id == queue.other.id, Job.status == "queued")) == 1

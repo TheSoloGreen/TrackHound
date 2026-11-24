@@ -13,6 +13,7 @@ class JobExecution:
     user_id: int
     kind: str = "scan"
     cancelled: threading.Event = field(default_factory=threading.Event)
+    cancellable: bool = True
     last_progress_write: float = field(default_factory=time.monotonic)
 
 

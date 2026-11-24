@@ -69,9 +69,13 @@ class JobManager:
 
     async def recover(self):
         async with async_session_maker() as db:
+            affected_users = (await db.scalars(select(Job.user_id).where(
+                Job.status == "running").distinct())).all()
             await db.execute(update(Job).where(Job.status == "running").values(
                 status="interrupted", active_key=None, finished_at=utcnow(),
                 error="The application stopped during this job. It was not retried. Rescan affected files before reviewing or retrying an edit; preserve any backup files."))
+            for user_id in affected_users:
+                await self.prune_history(db, user_id)
             await db.commit()
 
     async def start(self, engine=None):
@@ -90,11 +94,13 @@ class JobManager:
             raise
 
     async def stop(self):
-        self.stopping = True
-        self.wake.set()
-        # Do not abandon a native write in a thread. Its own execution deadline applies.
-        if self.execution and self.execution.kind not in EDITS:
-            self.execution.cancelled.set()
+        async with self.coordination:
+            self.stopping = True
+            self.wake.set()
+            # Do not abandon a native write in a thread. Its own execution deadline applies.
+            if (self.execution and self.execution.kind not in EDITS
+                    and self.execution.cancellable):
+                self.execution.cancelled.set()
         interrupted = False
         try:
             if self.task:
@@ -120,6 +126,8 @@ class JobManager:
 
     async def claim(self):
         async with self.coordination, async_session_maker() as db:
+            if self.stopping:
+                return None
             next_id = select(Job.id).where(Job.status == "queued").order_by(Job.id).limit(1).scalar_subquery()
             job_id = await db.scalar(update(Job).where(Job.id == next_id, Job.status == "queued").values(
                 status="running", started_at=utcnow()).returning(Job.id))
@@ -142,15 +150,21 @@ class JobManager:
                 pass
 
     async def execute(self, job_id):
-        async with async_session_maker() as db:
-            job = await db.get(Job, job_id)
-            if not job or job.status != "running":
-                return
-            execution = JobExecution(job.id, job.user_id, kind=job.kind)
-            self.execution = execution
-            if job.cancel_requested:
-                execution.cancelled.set()
-            kind, payload, user_id = job.kind, job.payload, job.user_id
+        async with self.coordination:
+            async with async_session_maker() as db:
+                job = await db.get(Job, job_id)
+                if not job or job.status != "running":
+                    return
+                if self.stopping:
+                    job.status = "queued"
+                    job.started_at = None
+                    await db.commit()
+                    return
+                execution = JobExecution(job.id, job.user_id, kind=job.kind)
+                self.execution = execution
+                if job.cancel_requested:
+                    execution.cancelled.set()
+                kind, payload, user_id = job.kind, job.payload, job.user_id
         token = current_job.set(execution)
         result, outcome, error = {}, "completed", None
         try:
@@ -170,17 +184,22 @@ class JobManager:
                 error = "Job failed unexpectedly. Check the application log and rescan before retrying a media edit."
             outcome = "cancelled" if execution.cancelled.is_set() and kind not in EDITS else "failed"
         finally:
+            # Keep the execution visible until its terminal row is durable, but
+            # stop accepting cancellation once the operation body has ended.
+            async with self.coordination:
+                execution.cancellable = False
             current_job.reset(token)
-            self.execution = None
         # Retry only the outcome write, never the physical operation. Do not
         # claim more work while a temporarily unavailable DB cannot record it.
         while True:
             try:
-                async with async_session_maker() as db:
-                    await db.execute(update(Job).where(Job.id == job_id).values(
-                        status=outcome, result=result, error=error, active_key=None, finished_at=utcnow()))
-                    await self.prune_history(db, user_id)
-                    await db.commit()
+                async with self.coordination:
+                    async with async_session_maker() as db:
+                        await db.execute(update(Job).where(Job.id == job_id).values(
+                            status=outcome, result=result, error=error, active_key=None, finished_at=utcnow()))
+                        await self.prune_history(db, user_id)
+                        await db.commit()
+                    self.execution = None
                 break
             except OperationalError:
                 logger.exception("Cannot persist job %s outcome; the operation will not be repeated", job_id)
@@ -278,6 +297,9 @@ class JobManager:
             raise HTTPException(409, "This job has already finished.")
         if job.status == "running" and job.kind in EDITS:
             raise HTTPException(409, "A media edit is already running. It must finish safely; it cannot be cancelled mid-write.")
+        if (job.status == "running" and self.execution
+                and self.execution.job_id == job.id and not self.execution.cancellable):
+            raise HTTPException(409, "This job is finalizing and can no longer be cancelled.")
         job.cancel_requested = True
         if job.status == "queued":
             job.status, job.active_key, job.finished_at = "cancelled", None, utcnow()

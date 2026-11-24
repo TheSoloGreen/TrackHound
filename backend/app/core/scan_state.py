@@ -1,6 +1,7 @@
 """Centralized scan state management."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from app.models.schemas import ScanStatus
@@ -14,6 +15,11 @@ class ScanStateManager:
         self._lock = asyncio.Lock()
         self._status_by_user: dict[int, ScanStatus] = {}
         self._cancel_requested_by_user: dict[int, bool] = {}
+        self._finalization_locks: dict[int, asyncio.Lock] = {}
+        self._finalizing_by_user: dict[int, bool] = {}
+
+    def _finalization_lock(self, user_id: int) -> asyncio.Lock:
+        return self._finalization_locks.setdefault(user_id, asyncio.Lock())
 
     def _get_or_create_status(self, user_id: int) -> ScanStatus:
         if user_id not in self._status_by_user:
@@ -47,12 +53,23 @@ class ScanStateManager:
 
     async def cancel_scan(self, user_id: int) -> ScanStatus | None:
         """Request cancellation for a running scan."""
-        async with self._lock:
-            status = self._get_or_create_status(user_id)
-            if not status.is_running:
-                return None
-            self._cancel_requested_by_user[user_id] = True
-            return status.model_copy(deep=True)
+        async with self._finalization_lock(user_id):
+            async with self._lock:
+                status = self._get_or_create_status(user_id)
+                if not status.is_running or self._finalizing_by_user.get(user_id, False):
+                    return None
+                self._cancel_requested_by_user[user_id] = True
+                return status.model_copy(deep=True)
+
+    @asynccontextmanager
+    async def finalization(self, user_id: int):
+        """Serialize the last cancellation decision with scan commit."""
+        async with self._finalization_lock(user_id):
+            async with self._lock:
+                cancelled = self._cancel_requested_by_user.get(user_id, False)
+                if not cancelled:
+                    self._finalizing_by_user[user_id] = True
+            yield not cancelled
 
     async def is_cancel_requested(self, user_id: int) -> bool:
         """Check whether cancellation has been requested."""
@@ -95,23 +112,27 @@ class ScanStateManager:
 
     async def finish_scan(self, user_id: int, *, failed: bool = False) -> ScanStatus:
         """Transition to not running while keeping progress context."""
-        async with self._lock:
-            status = self._get_or_create_status(user_id)
-            execution = current_job.get()
-            cancelled = self._cancel_requested_by_user.get(user_id, False) or bool(execution and execution.cancelled.is_set())
-            status.outcome = ("failed" if failed else "cancelled" if cancelled else
-                              "completed_with_errors" if status.error_count or status.warning_count else "completed")
-            status.finished_at = datetime.now(timezone.utc)
-            self._cancel_requested_by_user[user_id] = False
-            status.is_running = False
-            status.current_location = None
-            status.current_file = None
-            return await self._persist(status, force=True)
+        async with self._finalization_lock(user_id):
+            async with self._lock:
+                status = self._get_or_create_status(user_id)
+                execution = current_job.get()
+                cancelled = self._cancel_requested_by_user.get(user_id, False) or bool(execution and execution.cancelled.is_set())
+                status.outcome = ("failed" if failed else "cancelled" if cancelled else
+                                  "completed_with_errors" if status.error_count or status.warning_count else "completed")
+                status.finished_at = datetime.now(timezone.utc)
+                self._cancel_requested_by_user[user_id] = False
+                self._finalizing_by_user[user_id] = False
+                status.is_running = False
+                status.current_location = None
+                status.current_file = None
+                return await self._persist(status, force=True)
 
     async def reset(self) -> None:
         """Reset state for tests."""
         async with self._lock:
             self._cancel_requested_by_user = {}
+            self._finalizing_by_user = {}
+            self._finalization_locks = {}
             self._status_by_user = {}
 
 

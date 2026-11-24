@@ -1,6 +1,7 @@
 """Media file scanner for discovering and processing media files."""
 
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 import stat as stat_module
 import os
@@ -345,12 +346,17 @@ def _missing_paths(rows, roots):
     return missing
 
 
-async def _reconcile_missing_files(db, user_id, discovered, roots):
+async def _find_missing_files(db, user_id, discovered, roots):
     if not roots:
-        return 0
+        return []
     scope = or_(*(MediaFile.file_path.startswith(root.rstrip("/\\") + os.sep, autoescape=True) for root in roots))
     rows = (await db.execute(select(MediaFile.id, MediaFile.file_path).where(MediaFile.user_id == user_id, scope))).all()
-    missing = await asyncio.to_thread(_missing_paths, [row for row in rows if row.file_path not in discovered], roots)
+    return await asyncio.to_thread(_missing_paths, [row for row in rows if row.file_path not in discovered], roots)
+
+
+async def _reconcile_missing_files(db, user_id, discovered, roots, missing=None):
+    if missing is None:
+        missing = await _find_missing_files(db, user_id, discovered, roots)
     for start in range(0, len(missing), 500):
         await db.execute(delete(MediaFile).where(MediaFile.user_id == user_id, MediaFile.id.in_(missing[start:start + 500])))
     await db.execute(delete(Season).where(Season.show_id.in_(select(Show.id).where(Show.user_id == user_id)),
@@ -359,6 +365,11 @@ async def _reconcile_missing_files(db, user_id, discovered, roots):
                                        ~select(MediaFile.id).where(MediaFile.show_id == Show.id).exists(),
                                        ~select(Season.id).where(Season.show_id == Show.id).exists()))
     return len(missing)
+
+
+@asynccontextmanager
+async def _unlocked():
+    yield
 
 
 async def run_scan(locations, location_media_types, user_id, incremental=True, user_plex_token=None, plex_warning=None):
@@ -407,19 +418,36 @@ async def run_scan(locations, location_media_types, user_id, incremental=True, u
                 complete = complete and result is not None
                 await scan_state_manager.update_status(user_id, files_scanned=index + 1)
             reconciled = complete and len(roots) == len(locations) and not await scan_state_manager.is_cancel_requested(user_id)
-            removed = await _reconcile_missing_files(db, user_id, all_files, roots) if reconciled else 0
-            # Counts reflect the rows that were actually saved, even after a partial scan.
-            current_locations = (await db.scalars(select(ScanLocation).where(ScanLocation.user_id == user_id))).all()
-            for location in current_locations:
-                location.file_count = await db.scalar(select(func.count(MediaFile.id)).where(MediaFile.user_id == user_id,
-                    MediaFile.file_path.startswith(location.path.rstrip("/\\") + os.sep, autoescape=True))) or 0
-                if reconciled and location.path in roots:
-                    location.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
-            if reconciled and await scan_state_manager.is_cancel_requested(user_id):
-                await db.rollback()
+            # Filesystem validation belongs before the cancellation cutover; it
+            # can be slow and must not block unrelated queue coordination.
+            missing = await _find_missing_files(db, user_id, all_files, roots) if reconciled else []
+            execution = current_job.get()
+            if execution:
+                from app.core.jobs import job_manager
+                coordination = job_manager.coordination
             else:
+                coordination = _unlocked()
+            async with coordination:
+                async with scan_state_manager.finalization(user_id) as state_cancellable:
+                    cancelled = not state_cancellable or bool(execution and execution.cancelled.is_set())
+                    reconciled = reconciled and not cancelled
+                    if execution and not cancelled:
+                        execution.cancellable = False
+                    removed = await _reconcile_missing_files(
+                        db, user_id, all_files, roots, missing=missing) if reconciled else 0
+                    # Counts reflect rows actually saved, even after a partial scan.
+                    current_locations = (await db.scalars(select(ScanLocation).where(
+                        ScanLocation.user_id == user_id))).all()
+                    for location in current_locations:
+                        location.file_count = await db.scalar(select(func.count(MediaFile.id)).where(
+                            MediaFile.user_id == user_id,
+                            MediaFile.file_path.startswith(location.path.rstrip("/\\") + os.sep, autoescape=True))) or 0
+                        if reconciled and location.path in roots:
+                            location.last_scanned = datetime.now(timezone.utc).replace(tzinfo=None)
                 await db.commit()
-                await scan_state_manager.update_status(user_id, files_removed=removed)
+            # Progress persistence takes its own database session and must not
+            # run while queue/finalization coordination is held.
+            await scan_state_manager.update_status(user_id, files_removed=removed)
     except asyncio.CancelledError:
         failed = True
         raise
